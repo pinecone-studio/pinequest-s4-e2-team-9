@@ -1,0 +1,25 @@
+-- AlterTable
+ALTER TABLE "Submission"
+ADD COLUMN "status" TEXT NOT NULL DEFAULT 'DRAFT',
+ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ALTER COLUMN "score" SET DEFAULT 0,
+ALTER COLUMN "score" SET DATA TYPE DOUBLE PRECISION,
+ALTER COLUMN "total" SET DEFAULT 0,
+ALTER COLUMN "total" SET DATA TYPE DOUBLE PRECISION,
+ALTER COLUMN "percentage" SET DEFAULT 0;
+
+-- AlterTable
+ALTER TABLE "SubmissionAnswer"
+ADD COLUMN "earnedPoints" DOUBLE PRECISION NOT NULL DEFAULT 0,
+ADD COLUMN "maxPoints" DOUBLE PRECISION NOT NULL DEFAULT 1,
+ADD COLUMN "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+-- CreateIndex
+CREATE INDEX "Submission_examId_idx" ON "Submission"("examId");
+
+-- CreateIndex
+CREATE INDEX "Submission_studentId_idx" ON "Submission"("studentId");
+
+-- CreateIndex
+CREATE INDEX "SubmissionAnswer_submissionId_idx" ON "SubmissionAnswer"("submissionId");
