@@ -1,6 +1,5 @@
-import React from 'react';
 import Link from 'next/link';
-import CreateClassroomForm from '../../../components/ui/CreateClassroomForm';
+import CreateClassroomForm from '@/components/ui/CreateClassroomForm';
 
 export default function NewClassroomPage() {
   return (

@@ -1,18 +1,38 @@
-'use client';
-
-import { mockClassrooms, mockRecentExams } from '@/constants/mockData';
 import Link from 'next/link';
+import { connection } from 'next/server';
+import { prisma } from '@/lib/prisma';
 
-export default function DashboardPage() {
-  const totalClasses = mockClassrooms.length;
-  const totalStudents = mockClassrooms.reduce((sum, c) => sum + c.studentCount, 0);
+export default async function DashboardPage() {
+  await connection();
+
+  const [totalClasses, totalStudents, exams] = await Promise.all([
+    prisma.classroom.count(),
+    prisma.student.count(),
+    prisma.exam.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        classroom: {
+          select: {
+            name: true,
+            _count: { select: { students: true } },
+          },
+        },
+        _count: { select: { submissions: true } },
+      },
+    }),
+  ]);
+
+  const activeExamCount = exams.filter(
+    (exam) => exam._count.submissions < exam.classroom._count.students
+  ).length;
+  const recentExams = exams.slice(0, 5);
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-stone-200 pb-6 mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-stone-900 tracking-tight mb-1">Сайн байна уу, Багшаа! 👋</h1>
+            <h1 className="text-3xl font-bold text-stone-900 tracking-tight mb-1">Сайн байна уу, Багшаа!</h1>
             <p className="text-stone-500 text-sm">
               Өнөөдрийн байдлаар таны ангиуд болон шалгалтын явцын хураангуй.
             </p>
@@ -24,15 +44,15 @@ export default function DashboardPage() {
             >
               Ангиуд харах
             </Link>
-            <button
-              onClick={() => alert('Шинэ шалгалт үүсгэх функц (Ирээдүйд AI модуль дээр хийгдэнэ)')}
+            <Link
+              href="/exams/new"
               className="bg-[#8B5E3C] hover:bg-[#734d31] text-white px-5 py-2.5 rounded-lg font-medium text-sm inline-flex items-center gap-2 shadow-sm transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
               Шинэ шалгалт үүсгэх
-            </button>
+            </Link>
           </div>
         </div>
 
@@ -64,9 +84,7 @@ export default function DashboardPage() {
           <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-sm flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-stone-500 mb-1">Идэвхтэй шалгалт</p>
-              <h3 className="text-3xl font-bold text-stone-900">
-                {mockRecentExams.filter((e) => e.status === 'active').length}
-              </h3>
+              <h3 className="text-3xl font-bold text-stone-900">{activeExamCount}</h3>
             </div>
             <div className="w-12 h-12 bg-green-50 text-green-600 rounded-xl flex items-center justify-center">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
@@ -78,48 +96,65 @@ export default function DashboardPage() {
 
         <div className="bg-white border border-stone-200 rounded-xl shadow-sm p-6">
           <h2 className="text-lg font-bold text-stone-900 mb-4">Сүүлийн шалгалтууд</h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-stone-200 text-sm text-left text-stone-600">
-              <thead className="bg-stone-50 text-xs font-bold text-stone-700 uppercase tracking-wider">
-                <tr>
-                  <th scope="col" className="px-6 py-3">Шалгалтын нэр</th>
-                  <th scope="col" className="px-6 py-3">Анги</th>
-                  <th scope="col" className="px-6 py-3">Хичээл</th>
-                  <th scope="col" className="px-6 py-3">Явц / Гүйцэтгэл</th>
-                  <th scope="col" className="px-6 py-3 text-right">Төлөв</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-200">
-                {mockRecentExams.map((exam) => (
-                  <tr key={exam.id} className="hover:bg-stone-50/50 transition-colors">
-                    <td className="px-6 py-4 font-semibold text-stone-900">{exam.title}</td>
-                    <td className="px-6 py-4">{exam.classroomName}</td>
-                    <td className="px-6 py-4">{exam.subject}</td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-stone-800">{exam.progress}</span>
-                        <div className="w-24 bg-stone-100 rounded-full h-2">
-                          <div
-                            className="bg-[#8B5E3C] h-2 rounded-full"
-                            style={{ width: exam.status === 'completed' ? '100%' : '70%' }}
-                          ></div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        exam.status === 'active'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-stone-100 text-stone-800'
-                      }`}>
-                        {exam.status === 'active' ? 'Идэвхтэй' : 'Дууссан'}
-                      </span>
-                    </td>
+          {recentExams.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-stone-200 text-sm text-left text-stone-600">
+                <thead className="bg-stone-50 text-xs font-bold text-stone-700 uppercase tracking-wider">
+                  <tr>
+                    <th scope="col" className="px-6 py-3">Шалгалтын нэр</th>
+                    <th scope="col" className="px-6 py-3">Анги</th>
+                    <th scope="col" className="px-6 py-3">Хичээл</th>
+                    <th scope="col" className="px-6 py-3">Явц / Гүйцэтгэл</th>
+                    <th scope="col" className="px-6 py-3 text-right">Төлөв</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-stone-200">
+                  {recentExams.map((exam) => {
+                    const submissions = exam._count.submissions;
+                    const students = exam.classroom._count.students;
+                    const isDone = students > 0 && submissions >= students;
+                    const progressPercent = students ? Math.min(100, (submissions / students) * 100) : 0;
+
+                    return (
+                      <tr key={exam.id} className="hover:bg-stone-50/50 transition-colors">
+                        <td className="px-6 py-4 font-semibold text-stone-900">
+                          <Link href={`/exams/${exam.id}/results`} className="hover:text-[#8B5E3C]">
+                            {exam.title}
+                          </Link>
+                        </td>
+                        <td className="px-6 py-4">{exam.classroom.name}</td>
+                        <td className="px-6 py-4">{exam.subject}</td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-stone-800">{submissions}/{students}</span>
+                            <div className="w-24 bg-stone-100 rounded-full h-2">
+                              <div
+                                className="bg-[#8B5E3C] h-2 rounded-full"
+                                style={{ width: `${progressPercent}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            isDone
+                              ? 'bg-stone-100 text-stone-800'
+                              : 'bg-green-100 text-green-800'
+                          }`}>
+                            {isDone ? 'Дууссан' : 'Идэвхтэй'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-8 border border-dashed border-stone-200 rounded-xl bg-stone-50/50">
+              <p className="text-sm text-stone-500">Одоогоор шалгалт үүсгээгүй байна.</p>
+            </div>
+          )}
         </div>
       </div>
     </div>

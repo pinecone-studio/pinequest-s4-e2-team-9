@@ -1,12 +1,21 @@
-import React from 'react';
 import Link from 'next/link';
-import ClassroomCard from '../../components/ui/ClassroomCard';
-import EmptyClassroomState from '../../components/ui/EmptyClassroomState';
-import { mockClassrooms } from '../../constants/mockData';
+import { connection } from 'next/server';
+import ClassroomCard from '@/components/ui/ClassroomCard';
+import EmptyClassroomState from '@/components/ui/EmptyClassroomState';
+import { prisma } from '@/lib/prisma';
 
-export default function ClassroomsPage() {
- 
-  const hasClassrooms = mockClassrooms.length > 0;
+export default async function ClassroomsPage() {
+  await connection();
+
+  const classrooms = await prisma.classroom.findMany({
+    include: {
+      students: true,
+      exams: {
+        orderBy: { createdAt: 'desc' },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
@@ -34,10 +43,19 @@ export default function ClassroomsPage() {
       </div>
 
       <div className="max-w-7xl mx-auto">
-        {hasClassrooms ? (
+        {classrooms.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {mockClassrooms.map((classroom) => (
-              <ClassroomCard key={classroom.id} classroom={classroom} />
+            {classrooms.map((classroom) => (
+              <ClassroomCard
+                key={classroom.id}
+                classroom={{
+                  id: classroom.id,
+                  name: classroom.name,
+                  studentCount: classroom.students.length,
+                  examCount: classroom.exams.length,
+                  lastExam: classroom.exams[0]?.title,
+                }}
+              />
             ))}
           </div>
         ) : (
