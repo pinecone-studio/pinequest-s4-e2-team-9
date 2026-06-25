@@ -1,9 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { saveAnswerKeyAction } from "@/actions/answer-key-actions";
+import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
 import { prisma } from "@/lib/prisma";
-
-const answerOptions = ["A", "B", "C", "D"];
 
 export default async function AnswerKeyPage({
   params,
@@ -16,6 +14,12 @@ export default async function AnswerKeyPage({
     include: {
       classroom: { select: { name: true } },
       answerKeys: { orderBy: { question: "asc" } },
+      questions: {
+        orderBy: { number: "asc" },
+        include: {
+          options: { orderBy: { createdAt: "asc" } },
+        },
+      },
     },
   });
 
@@ -26,6 +30,34 @@ export default async function AnswerKeyPage({
   const existingAnswers = new Map(
     exam.answerKeys.map((item) => [item.question, item.answer])
   );
+  const questions = exam.questions.map((question) => ({
+    id: question.id,
+    number: question.number,
+    text: question.text,
+    points: question.points,
+    options: question.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      text: option.text,
+      isCorrect: existingAnswers.get(question.number) === option.label || option.isCorrect,
+    })),
+  }));
+  const hasEmptyContent =
+    questions.length === 0 ||
+    questions.some(
+      (question) =>
+        !question.text.trim() ||
+        question.options.length < 2 ||
+        question.options.every((option) => !option.text.trim())
+    );
+  const hasNoParsedContent =
+    questions.length === 0 ||
+    questions.every(
+      (question) =>
+        !question.text.trim() &&
+        question.options.every((option) => !option.text.trim())
+    );
+  const shouldShowAiFailedState = Boolean(exam.materialUrl) && hasNoParsedContent;
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
@@ -51,61 +83,39 @@ export default async function AnswerKeyPage({
         </div>
 
         <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-stone-700">
-          AI шалгалтын бүтцийг уншсан. Одоо зөв хариултуудыг багш баталгаажуулна.
+          <p>
+            AI шалгалтын бүтцийг уншсан. Одоо багш асуулт, сонголт, зөв хариулт болон оноог баталгаажуулна.
+          </p>
+          <p className="mt-2 font-medium">
+            AI-ийн санал болгосон зөв хариулт алдаатай байж болно. Эцсийн зөв хариултыг багш өөрөө баталгаажуулна.
+          </p>
         </div>
 
-        <form action={saveAnswerKeyAction} className="rounded-xl border border-stone-200 bg-white p-6 shadow-sm">
-          <input type="hidden" name="examId" value={exam.id} />
-          <div className="space-y-4">
-            {Array.from({ length: exam.questionCount }, (_, index) => {
-              const question = index + 1;
-
-              return (
-                <fieldset
-                  key={question}
-                  className="flex flex-col gap-3 rounded-lg border border-stone-200 p-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <legend className="text-sm font-semibold text-stone-900">
-                    {question}-р асуулт
-                  </legend>
-                  <div className="grid grid-cols-4 gap-2">
-                    {answerOptions.map((option) => (
-                      <label
-                        key={option}
-                        className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-stone-200 px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50"
-                      >
-                        <input
-                          type="radio"
-                          name={`q-${question}`}
-                          value={option}
-                          required
-                          defaultChecked={existingAnswers.get(question) === option}
-                          className="h-4 w-4 accent-[#8B5E3C]"
-                        />
-                        {option}
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-              );
-            })}
-          </div>
-
-          <div className="mt-6 flex items-center justify-end gap-3 border-t border-stone-100 pt-4">
+        {shouldShowAiFailedState ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-stone-900">
+              AI шалгалтын материалыг уншиж чадсангүй.
+            </h2>
+            <p className="mt-2 text-sm text-stone-700">
+              Энэ шалгалтад асуулт, сонголтын текст үүсээгүй байна.
+            </p>
+            <p className="mt-1 text-sm text-stone-700">
+              Зураг тод эсэх, GEMINI_API_KEY тохиргоо болон файл оруулах талбарыг шалгаад дахин үүсгэнэ үү.
+            </p>
             <Link
-              href={`/classrooms/${exam.classroomId}`}
-              className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              href={`/exams/new?classroomId=${exam.classroomId}`}
+              className="mt-5 inline-flex rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
             >
-              Цуцлах
+              Шинэ шалгалт үүсгэх
             </Link>
-            <button
-              type="submit"
-              className="rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
-            >
-              Зөв хариулт хадгалах
-            </button>
           </div>
-        </form>
+        ) : (
+          <AnswerKeyReviewForm
+            examId={exam.id}
+            questions={questions}
+            hasEmptyContent={hasEmptyContent}
+          />
+        )}
       </div>
     </div>
   );
