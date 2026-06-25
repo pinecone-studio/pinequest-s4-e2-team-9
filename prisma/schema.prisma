@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../lib/generated/prisma"
@@ -12,109 +7,70 @@ datasource db {
   provider = "postgresql"
 }
 
-
-
-model Teacher {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  school    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  classrooms Classroom[]
-  exams      Exam[]
-}
-
 model Classroom {
-  id        String   @id @default(cuid())
-  teacherId String
+  id        String    @id @default(cuid())
   name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  teacher  Teacher   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  students Student[]
-  exams    Exam[]
+  subject   String?
+  students  Student[]
+  exams     Exam[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model Student {
-  id          String   @id @default(cuid())
+  id          String       @id @default(cuid())
+  name        String
   classroomId String
-  displayName String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
   classroom   Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   submissions Submission[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 }
 
 model Exam {
-  id               String   @id @default(cuid())
-  teacherId        String
-  classroomId      String
-  title            String
-  subject          String
-  questionCount    Int
-  pointPerQuestion Float    @default(1)
-  totalScore       Float
-  status           String   @default("needs_answer_key")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
-  classroom   Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
-  answerKeys  AnswerKey[]
-  submissions Submission[]
+  id            String       @id @default(cuid())
+  title         String
+  subject       String
+  questionCount Int
+  classroomId   String
+  classroom     Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  materialUrl   String?
+  answerKeys    AnswerKey[]
+  submissions   Submission[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 }
 
 model AnswerKey {
-  id             String @id @default(cuid())
-  examId         String
-  questionNumber Int
-  correctAnswer  String
-  points         Float  @default(1)
+  id       String @id @default(cuid())
+  examId   String
+  exam     Exam   @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question Int
+  answer   String
 
-  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
-
-  @@unique([examId, questionNumber])
+  @@unique([examId, question])
 }
 
 model Submission {
-  id               String   @id @default(cuid())
-  examId           String
-  studentId        String
-  imageUrl         String?
-  status           String   @default("uploaded")
-  aiConfidence     Float?
-  score            Float    @default(0)
-  totalScore        Float    @default(0)
-  percentage       Float    @default(0)
-  correctCount     Int      @default(0)
-  wrongCount       Int      @default(0)
-  blankCount       Int      @default(0)
-  needsReview      Boolean  @default(false)
-  teacherConfirmed Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  exam    Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
-  student Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  answers SubmissionAnswer[]
+  id          String             @id @default(cuid())
+  examId      String
+  exam        Exam               @relation(fields: [examId], references: [id], onDelete: Cascade)
+  studentId   String
+  student     Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  imageUrl    String?
+  score       Int
+  total       Int
+  percentage  Float
+  answers     SubmissionAnswer[]
+  createdAt   DateTime           @default(now())
 }
 
 model SubmissionAnswer {
-  id                   String  @id @default(cuid())
-  submissionId          String
-  questionNumber        Int
-  detectedAnswer        String
-  correctAnswer         String
-  isCorrect             Boolean
-  confidence            Float?
-  pointsAwarded         Float
-  teacherOverrideAnswer String?
-
-  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-
-  @@unique([submissionId, questionNumber])
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  question     Int
+  selected     String
+  correct      String
+  isCorrect    Boolean
 }
