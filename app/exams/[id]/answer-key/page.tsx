@@ -1,3 +1,122 @@
-export default function AnswerKeyPage() {
-  return null;
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
+import { prisma } from "@/lib/prisma";
+
+export default async function AnswerKeyPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const exam = await prisma.exam.findUnique({
+    where: { id },
+    include: {
+      classroom: { select: { name: true } },
+      answerKeys: { orderBy: { question: "asc" } },
+      questions: {
+        orderBy: { number: "asc" },
+        include: {
+          options: { orderBy: { createdAt: "asc" } },
+        },
+      },
+    },
+  });
+
+  if (!exam) {
+    notFound();
+  }
+
+  const existingAnswers = new Map(
+    exam.answerKeys.map((item) => [item.question, item.answer])
+  );
+  const questions = exam.questions.map((question) => ({
+    id: question.id,
+    number: question.number,
+    text: question.text,
+    points: question.points,
+    options: question.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      text: option.text,
+      isCorrect: existingAnswers.get(question.number) === option.label || option.isCorrect,
+    })),
+  }));
+  const hasEmptyContent =
+    questions.length === 0 ||
+    questions.some(
+      (question) =>
+        !question.text.trim() ||
+        question.options.length < 2 ||
+        question.options.every((option) => !option.text.trim())
+    );
+  const hasNoParsedContent =
+    questions.length === 0 ||
+    questions.every(
+      (question) =>
+        !question.text.trim() &&
+        question.options.every((option) => !option.text.trim())
+    );
+  const shouldShowAiFailedState = Boolean(exam.materialUrl) && hasNoParsedContent;
+
+  return (
+    <div className="min-h-screen bg-stone-50/30 p-8">
+      <div className="mx-auto max-w-4xl">
+        <div className="mb-6 border-b border-stone-200 pb-6">
+          <Link
+            href="/classrooms"
+            className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+          >
+            <span aria-hidden="true">←</span>
+            Ангиуд руу буцах
+          </Link>
+          <h1 className="text-3xl font-bold tracking-tight text-stone-900">
+            {exam.title}
+          </h1>
+          <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
+            <span>{exam.classroom.name}</span>
+            <span>·</span>
+            <span>{exam.subject}</span>
+            <span>·</span>
+            <span>{exam.questionCount} асуулт</span>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-stone-700">
+          <p>
+            AI шалгалтын бүтцийг уншсан. Одоо багш асуулт, сонголт, зөв хариулт болон оноог баталгаажуулна.
+          </p>
+          <p className="mt-2 font-medium">
+            AI-ийн санал болгосон зөв хариулт алдаатай байж болно. Эцсийн зөв хариултыг багш өөрөө баталгаажуулна.
+          </p>
+        </div>
+
+        {shouldShowAiFailedState ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-stone-900">
+              AI шалгалтын материалыг уншиж чадсангүй.
+            </h2>
+            <p className="mt-2 text-sm text-stone-700">
+              Энэ шалгалтад асуулт, сонголтын текст үүсээгүй байна.
+            </p>
+            <p className="mt-1 text-sm text-stone-700">
+              Зураг тод эсэх, GEMINI_API_KEY тохиргоо болон файл оруулах талбарыг шалгаад дахин үүсгэнэ үү.
+            </p>
+            <Link
+              href={`/exams/new?classroomId=${exam.classroomId}`}
+              className="mt-5 inline-flex rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
+            >
+              Шинэ шалгалт үүсгэх
+            </Link>
+          </div>
+        ) : (
+          <AnswerKeyReviewForm
+            examId={exam.id}
+            questions={questions}
+            hasEmptyContent={hasEmptyContent}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
