@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { connection } from "next/server";
+import { AlertCircle, ArrowLeft, FilePlus2 } from "lucide-react";
 import { createExamAction } from "@/actions/exam-actions";
+import PageHeader from "@/components/layout/page-header";
+import LoadingSubmitButton from "@/components/ui/loading-submit-button";
 import { prisma } from "@/lib/prisma";
 import { SUBJECT_OPTIONS } from "@/lib/subjects";
 
@@ -25,6 +28,7 @@ export default async function NewExamPage({
     return (
       <div className="min-h-screen bg-stone-50/30 p-8">
         <div className="mx-auto max-w-xl rounded-xl border border-dashed border-stone-200 bg-white p-8 text-center shadow-sm">
+          <AlertCircle className="mx-auto mb-4 size-10 text-[#8B5E3C]" aria-hidden="true" />
           <h1 className="text-2xl font-bold tracking-tight text-stone-900">
             Эхлээд анги үүсгэнэ үү
           </h1>
@@ -33,8 +37,9 @@ export default async function NewExamPage({
           </p>
           <Link
             href="/classrooms/new"
-            className="mt-5 inline-flex rounded-lg bg-[#8B5E3C] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
+            className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#8B5E3C] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:bg-[#734d31]"
           >
+            <FilePlus2 className="size-4" aria-hidden="true" />
             Анги үүсгэх
           </Link>
         </div>
@@ -45,19 +50,18 @@ export default async function NewExamPage({
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
       <div className="mx-auto mb-6 max-w-2xl">
-        <Link
-          href="/classrooms"
-          className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+        <PageHeader
+          title="Шинэ шалгалт үүсгэх"
+          description="Шалгалтын материалаа оруулаад AI-аар асуулт, сонголт, зөв хариуг уншуулна."
         >
-          <span aria-hidden="true">←</span>
-          Ангиуд руу буцах
-        </Link>
-        <h1 className="text-2xl font-bold tracking-tight text-stone-900">
-          Шинэ шалгалт үүсгэх
-        </h1>
-        <p className="mt-1 text-sm text-stone-500">
-          Шалгалтын материалаа оруулна уу. AI асуулт, сонголт болон зөв хариуг уншиж дараагийн алхамд багш баталгаажуулна.
-        </p>
+          <Link
+            href="/classrooms"
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            Ангиуд руу буцах
+          </Link>
+        </PageHeader>
       </div>
 
       <form
@@ -125,13 +129,16 @@ export default async function NewExamPage({
           </div>
 
           {shouldShowAiError ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-stone-800">
-              <p className="font-semibold">
-                AI шалгалтын материалыг уншиж чадсангүй. Gemini түр ачаалалтай байж магадгүй. 1 минутын дараа дахин оролдоно уу.
-              </p>
-              <p className="mt-2">
-                Хэрэв файл оруулахгүй бол асуултын тоог гараар оруулж шалгалт үүсгэж болно.
-              </p>
+            <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-stone-800">
+              <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-700" aria-hidden="true" />
+              <div>
+                <p className="font-semibold">
+                  AI шалгалтын материалыг уншиж чадсангүй. Gemini түр ачаалалтай байж магадгүй. 1 минутын дараа дахин оролдоно уу.
+                </p>
+                <p className="mt-2">
+                  Хэрэв файл оруулахгүй бол асуултын тоог гараар оруулж шалгалт үүсгэж болно.
+                </p>
+              </div>
             </div>
           ) : null}
 
@@ -176,12 +183,13 @@ export default async function NewExamPage({
             >
               Цуцлах
             </Link>
-            <button
-              type="submit"
-              className="rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
+            <LoadingSubmitButton
+              loadingText="Уншиж байна..."
+              className="px-5 py-2 text-sm font-medium"
             >
+              <FilePlus2 className="size-4" aria-hidden="true" />
               Дараагийн алхам
-            </button>
+            </LoadingSubmitButton>
           </div>
         </div>
       </form>

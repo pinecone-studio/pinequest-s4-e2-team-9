@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AlertCircle, ArrowLeft, BarChart3, UploadCloud } from "lucide-react";
 import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
+import PageHeader from "@/components/layout/page-header";
 import { prisma } from "@/lib/prisma";
 
 export default async function AnswerKeyPage({
@@ -62,17 +64,36 @@ export default async function AnswerKeyPage({
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
       <div className="mx-auto max-w-4xl">
-        <div className="mb-6 border-b border-stone-200 pb-6">
+        <PageHeader
+          eyebrow={exam.title}
+          title="Зөв хариу баталгаажуулах"
+          description="AI уншсан асуулт, сонголт, оноог шалгаад хадгална."
+          actions={
+            <>
+              <Link
+                href={`/exams/${exam.id}/submissions`}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#8B5E3C] px-4 py-2 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:bg-[#734d31]"
+              >
+                <UploadCloud className="size-4" aria-hidden="true" />
+                Хариулт оруулах
+              </Link>
+              <Link
+                href={`/exams/${exam.id}/results`}
+                className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              >
+                <BarChart3 className="size-4" aria-hidden="true" />
+                Үр дүн
+              </Link>
+            </>
+          }
+        >
           <Link
             href="/classrooms"
-            className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
           >
-            <span aria-hidden="true">←</span>
+            <ArrowLeft className="size-4" aria-hidden="true" />
             Ангиуд руу буцах
           </Link>
-          <h1 className="text-3xl font-bold tracking-tight text-stone-900">
-            {exam.title}
-          </h1>
           <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
             <span>{exam.classroom.name}</span>
             <span>·</span>
@@ -80,19 +101,23 @@ export default async function AnswerKeyPage({
             <span>·</span>
             <span>{exam.questionCount} асуулт</span>
           </div>
-        </div>
+        </PageHeader>
 
-        <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-stone-700">
-          <p>
-            AI шалгалтын бүтцийг уншсан. Одоо багш асуулт, сонголт, зөв хариулт болон оноог баталгаажуулна.
-          </p>
-          <p className="mt-2 font-medium">
-            AI-ийн санал болгосон зөв хариулт алдаатай байж болно. Эцсийн зөв хариултыг багш өөрөө баталгаажуулна.
-          </p>
+        <div className="mb-6 flex gap-3 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-stone-700">
+          <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-700" aria-hidden="true" />
+          <div>
+            <p>
+              AI шалгалтын бүтцийг уншсан. Одоо багш асуулт, сонголт, зөв хариулт болон оноог баталгаажуулна.
+            </p>
+            <p className="mt-2 font-medium">
+              AI-ийн санал болгосон зөв хариулт алдаатай байж болно. Эцсийн зөв хариултыг багш өөрөө баталгаажуулна.
+            </p>
+          </div>
         </div>
 
         {shouldShowAiFailedState ? (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+            <AlertCircle className="mb-4 size-8 text-amber-700" aria-hidden="true" />
             <h2 className="text-lg font-bold text-stone-900">
               AI шалгалтын материалыг уншиж чадсангүй.
             </h2>

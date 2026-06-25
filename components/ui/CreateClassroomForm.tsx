@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { Plus } from 'lucide-react';
 import { createClassroomAction } from '@/actions/classroom-actions';
+import LoadingSubmitButton from '@/components/ui/loading-submit-button';
 
 export default function CreateClassroomForm() {
   return (
@@ -26,12 +28,13 @@ export default function CreateClassroomForm() {
           >
             Цуцлах
           </Link>
-          <button
-            type="submit"
-            className="px-5 py-2 text-sm font-medium text-white bg-[#8B5E3C] hover:bg-[#734d31] rounded-lg transition-colors shadow-sm"
+          <LoadingSubmitButton
+            loadingText="Үүсгэж байна..."
+            className="px-5 py-2 text-sm font-medium"
           >
+            <Plus className="size-4" aria-hidden="true" />
             Анги үүсгэх
-          </button>
+          </LoadingSubmitButton>
         </div>
       </div>
     </form>
