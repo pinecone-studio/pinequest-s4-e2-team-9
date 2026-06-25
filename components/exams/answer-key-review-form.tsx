@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { Save } from "lucide-react";
 import { saveAnswerKeyAction } from "@/actions/answer-key-actions";
+import LoadingSubmitButton from "@/components/ui/loading-submit-button";
 
 type OptionState = {
   id: string;
@@ -479,12 +481,13 @@ export default function AnswerKeyReviewForm({
       </div>
 
       <div className="mt-6 flex items-center justify-end gap-3 border-t border-stone-100 pt-4">
-        <button
-          type="submit"
-          className="rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
+        <LoadingSubmitButton
+          loadingText="Хадгалж байна..."
+          className="px-5 py-2 text-sm font-medium"
         >
+          <Save className="size-4" aria-hidden="true" />
           Зөв хариултыг хадгалах
-        </button>
+        </LoadingSubmitButton>
       </div>
     </form>
   );

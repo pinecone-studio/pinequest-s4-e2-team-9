@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 
 type ClassroomCardData = {
   id: string;
@@ -14,7 +15,7 @@ interface ClassroomCardProps {
 
 export default function ClassroomCard({ classroom }: ClassroomCardProps) {
   return (
-    <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+    <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-sm flex flex-col justify-between transition-all duration-200 hover:-translate-y-[1px] hover:shadow-md">
       <div>
       
         <div className="mb-4">
@@ -43,12 +44,10 @@ export default function ClassroomCard({ classroom }: ClassroomCardProps) {
    
       <Link
         href={`/classrooms/${classroom.id}`}
-        className="px-4 py-2 text-sm font-medium text-white bg-[#8B5E3C] rounded-lg hover:bg-[#734d31] transition-colors text-center inline-flex items-center justify-center gap-1 mt-auto"
+        className="px-4 py-2 text-sm font-medium text-white bg-[#8B5E3C] rounded-lg hover:bg-[#734d31] transition-all duration-200 text-center inline-flex items-center justify-center gap-1 mt-auto"
       >
         Нээх
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-3.5 h-3.5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-        </svg>
+        <ArrowRight className="size-3.5" aria-hidden="true" />
       </Link>
     </div>
   );

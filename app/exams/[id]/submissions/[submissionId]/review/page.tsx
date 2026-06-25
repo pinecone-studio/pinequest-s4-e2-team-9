@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import SubmissionReviewForm from "@/components/exams/submission-review-form";
+import PageHeader from "@/components/layout/page-header";
 import { gradeSubmission } from "@/lib/grading";
 import { prisma } from "@/lib/prisma";
 
@@ -62,27 +64,11 @@ export default async function SubmissionReviewPage({
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-6 border-b border-stone-200 pb-6">
-          <Link
-            href={`/exams/${submission.exam.id}/submissions`}
-            className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
-          >
-            <span aria-hidden="true">←</span>
-            Буцах
-          </Link>
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-stone-900">
-                {submission.exam.title}
-              </h1>
-              <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
-                <span>{submission.student.name}</span>
-                <span>·</span>
-                <span>{submission.exam.classroom.name}</span>
-                <span>·</span>
-                <span>{submission.exam.subject}</span>
-              </div>
-            </div>
+        <PageHeader
+          eyebrow={submission.exam.title}
+          title="Хариулт хянах"
+          description="AI уншсан хариултыг шалгаад дүнг хадгална."
+          actions={
             <div className="rounded-lg border border-stone-200 bg-white px-4 py-3 text-right shadow-sm">
               <p className="text-xs font-medium text-stone-500">Одоогийн дүн</p>
               <p className="text-2xl font-bold text-stone-900">
@@ -90,8 +76,23 @@ export default async function SubmissionReviewPage({
               </p>
               <p className="text-sm text-stone-500">{Math.round(submission.percentage)}%</p>
             </div>
+          }
+        >
+          <Link
+            href={`/exams/${submission.exam.id}/submissions`}
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            Буцах
+          </Link>
+          <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
+            <span>{submission.student.name}</span>
+            <span>·</span>
+            <span>{submission.exam.classroom.name}</span>
+            <span>·</span>
+            <span>{submission.exam.subject}</span>
           </div>
-        </div>
+        </PageHeader>
 
         <div className="mb-6 rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
           <div className="grid gap-4 text-sm text-stone-600 md:grid-cols-3">

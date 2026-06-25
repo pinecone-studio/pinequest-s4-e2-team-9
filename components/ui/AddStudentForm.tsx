@@ -1,4 +1,6 @@
+import { UserPlus } from 'lucide-react';
 import { createStudentAction } from '@/actions/classroom-actions';
+import LoadingSubmitButton from '@/components/ui/loading-submit-button';
 
 interface AddStudentFormProps {
   classroomId: string;
@@ -17,12 +19,13 @@ export default function AddStudentForm({ classroomId }: AddStudentFormProps) {
           required
           className="flex-1 px-3 py-1.5 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5E3C] focus:border-[#8B5E3C] text-stone-900"
         />
-        <button
-          type="submit"
-          className="px-4 py-1.5 text-sm font-medium text-white bg-[#8B5E3C] hover:bg-[#734d31] rounded-lg transition-colors whitespace-nowrap"
+        <LoadingSubmitButton
+          loadingText="Нэмж байна..."
+          className="whitespace-nowrap px-4 py-1.5 text-sm font-medium"
         >
+          <UserPlus className="size-4" aria-hidden="true" />
           Нэмэх
-        </button>
+        </LoadingSubmitButton>
       </div>
     </form>
   );

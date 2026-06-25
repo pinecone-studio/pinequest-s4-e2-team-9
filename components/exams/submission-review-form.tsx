@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { Save } from "lucide-react";
 import { saveReviewedSubmissionAction } from "@/actions/submission-actions";
+import LoadingSubmitButton from "@/components/ui/loading-submit-button";
 import { labelsMatch } from "@/lib/grading";
 
 type ReviewQuestion = {
@@ -144,12 +146,13 @@ export default function SubmissionReviewForm({
         >
           Буцах
         </Link>
-        <button
-          type="submit"
-          className="rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
+        <LoadingSubmitButton
+          loadingText="Хадгалж байна..."
+          className="px-5 py-2 text-sm font-medium"
         >
+          <Save className="size-4" aria-hidden="true" />
           Дүн хадгалах
-        </button>
+        </LoadingSubmitButton>
       </div>
     </form>
   );

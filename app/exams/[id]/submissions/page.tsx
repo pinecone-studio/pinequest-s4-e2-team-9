@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
+import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, UploadCloud } from "lucide-react";
 import { createSubmissionDraftAction } from "@/actions/submission-actions";
+import PageHeader from "@/components/layout/page-header";
+import LoadingSubmitButton from "@/components/ui/loading-submit-button";
 import { prisma } from "@/lib/prisma";
 
 export default async function SubmissionsPage({
@@ -58,35 +61,43 @@ export default async function SubmissionsPage({
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
       <div className="mx-auto max-w-7xl">
-        <div className="mb-6 border-b border-stone-200 pb-6">
+        <PageHeader
+          eyebrow={exam.title}
+          title="Сурагчийн хариулт оруулах"
+          description="Сурагчийг сонгоод хариултын хуудсыг AI-аар уншуулна."
+          actions={
+            <>
+              <Link
+                href={`/exams/${exam.id}/results`}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#8B5E3C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:bg-[#734d31]"
+              >
+                <BarChart3 className="size-4" aria-hidden="true" />
+                Үр дүн харах
+              </Link>
+              <div className="rounded-lg border border-stone-200 bg-white px-4 py-3 text-right shadow-sm">
+                <p className="text-xs font-medium text-stone-500">Хадгалсан дүн</p>
+                <p className="text-2xl font-bold text-stone-900">{savedCount}</p>
+              </div>
+            </>
+          }
+        >
           <Link
             href={`/exams/${exam.id}/answer-key`}
-            className="mb-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
           >
-            <span aria-hidden="true">←</span>
+            <ArrowLeft className="size-4" aria-hidden="true" />
             Зөв хариулт руу буцах
           </Link>
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-stone-900">
-                {exam.title}
-              </h1>
-              <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
-                <span>{exam.classroom.name}</span>
-                <span>·</span>
-                <span>{exam.subject}</span>
-                <span>·</span>
-                <span>{exam.questions.length} асуулт</span>
-                <span>·</span>
-                <span>{formatNumber(totalPoints)} оноо</span>
-              </div>
-            </div>
-            <div className="rounded-lg border border-stone-200 bg-white px-4 py-3 text-right shadow-sm">
-              <p className="text-xs font-medium text-stone-500">Хадгалсан дүн</p>
-              <p className="text-2xl font-bold text-stone-900">{savedCount}</p>
-            </div>
+          <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
+            <span>{exam.classroom.name}</span>
+            <span>·</span>
+            <span>{exam.subject}</span>
+            <span>·</span>
+            <span>{exam.questions.length} асуулт</span>
+            <span>·</span>
+            <span>{formatNumber(totalPoints)} оноо</span>
           </div>
-        </div>
+        </PageHeader>
 
         {saved ? (
           <div className="mb-6 rounded-lg border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800">
@@ -112,8 +123,9 @@ export default async function SubmissionsPage({
             </div>
             <Link
               href={`/exams/${exam.id}/answer-key`}
-              className="rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
             >
+              <ListChecks className="size-4" aria-hidden="true" />
               Зөв хариулт засах
             </Link>
           </div>
@@ -130,8 +142,12 @@ export default async function SubmissionsPage({
 
             {exam.classroom.students.length === 0 ? (
               <div className="mt-5 rounded-lg border border-dashed border-stone-200 bg-stone-50/60 p-5 text-center">
-                <p className="text-sm text-stone-500">
+                <Inbox className="mx-auto mb-3 size-8 text-[#8B5E3C]" aria-hidden="true" />
+                <h3 className="text-base font-bold text-stone-900">
                   Энэ ангид сурагч бүртгэгдээгүй байна.
+                </h3>
+                <p className="mt-1 text-sm text-stone-500">
+                  Хариултын хуудас оруулахын өмнө сурагчдын нэрийг нэмнэ үү.
                 </p>
                 <Link
                   href={`/classrooms/${exam.classroomId}`}
@@ -175,13 +191,14 @@ export default async function SubmissionsPage({
                     className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
                   />
                 </div>
-                <button
-                  type="submit"
+                <LoadingSubmitButton
                   disabled={!isAnswerKeyReady}
-                  className="w-full rounded-lg bg-[#8B5E3C] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31] disabled:cursor-not-allowed disabled:bg-stone-300"
+                  loadingText="Уншиж байна..."
+                  className="w-full px-5 py-2.5 text-sm font-medium"
                 >
+                  <UploadCloud className="size-4" aria-hidden="true" />
                   AI-аар уншуулах
-                </button>
+                </LoadingSubmitButton>
               </form>
             )}
           </section>
@@ -190,8 +207,12 @@ export default async function SubmissionsPage({
             <h2 className="text-lg font-bold text-stone-900">Оруулсан хариултууд</h2>
             {exam.submissions.length === 0 ? (
               <div className="mt-5 rounded-lg border border-dashed border-stone-200 bg-stone-50/60 p-8 text-center">
-                <p className="text-sm text-stone-500">
+                <Inbox className="mx-auto mb-3 size-8 text-[#8B5E3C]" aria-hidden="true" />
+                <h3 className="text-base font-bold text-stone-900">
                   Одоогоор сурагчийн хариулт оруулаагүй байна.
+                </h3>
+                <p className="mt-1 text-sm text-stone-500">
+                  Сурагч сонгоод хариултын хуудсын зургийг оруулна уу.
                 </p>
               </div>
             ) : (
@@ -217,7 +238,11 @@ export default async function SubmissionsPage({
                           {formatNumber(submission.score)} / {formatNumber(submission.total)}
                         </td>
                         <td className="px-4 py-3">{Math.round(submission.percentage)}%</td>
-                        <td className="px-4 py-3">{getStatusText(submission.status)}</td>
+                        <td className="px-4 py-3">
+                          <span className={getStatusClass(submission.status)}>
+                            {getStatusText(submission.status)}
+                          </span>
+                        </td>
                         <td className="px-4 py-3">{submission.createdAt.toLocaleDateString("mn-MN")}</td>
                         <td className="px-4 py-3 text-right">
                           <Link
@@ -251,13 +276,16 @@ function ErrorMessage({ error, examId }: { error: string; examId: string }) {
           : "Илгээсэн мэдээлэл буруу байна.";
 
   return (
-    <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
-      {text}{" "}
+    <div className="mb-6 flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+      <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div>
+        {text}{" "}
       {error === "answerKey" ? (
         <Link href={`/exams/${examId}/answer-key`} className="underline">
           Зөв хариулт руу очих
         </Link>
       ) : null}
+      </div>
     </div>
   );
 }
@@ -268,6 +296,12 @@ function getQueryValue(value: string | string[] | undefined) {
 
 function getStatusText(status: string) {
   return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
+}
+
+function getStatusClass(status: string) {
+  return status === "SAVED"
+    ? "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800"
+    : "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
 }
 
 function formatNumber(value: number) {

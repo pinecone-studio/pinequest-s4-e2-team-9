@@ -1,3 +1,5 @@
+import { UsersRound } from 'lucide-react';
+
 interface StudentTableProps {
   students: {
     id: string;
@@ -9,7 +11,11 @@ export default function StudentTable({ students }: StudentTableProps) {
   if (students.length === 0) {
     return (
       <div className="text-center py-8 border border-dashed border-stone-200 rounded-xl bg-stone-50/50">
-        <p className="text-sm text-stone-500">Энэ ангид одоогоор сурагч бүртгэгдээгүй байна. Эхний сурагчаа нэмээрэй.</p>
+        <UsersRound className="mx-auto mb-3 size-8 text-[#8B5E3C]" aria-hidden="true" />
+        <h3 className="text-base font-bold text-stone-900">Энэ ангид сурагч бүртгэгдээгүй байна</h3>
+        <p className="mt-1 text-sm text-stone-500">
+          Хариултын хуудас оруулахын өмнө сурагчдын нэрийг нэмнэ үү.
+        </p>
       </div>
     );
   }
