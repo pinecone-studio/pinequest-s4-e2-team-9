@@ -1,77 +1,145 @@
-'use client';
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { AlertCircle, ArrowLeft, BarChart3, UploadCloud } from "lucide-react";
+import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
+import PageHeader from "@/components/layout/page-header";
+import { prisma } from "@/lib/prisma";
 
-import React, { useState } from 'react';
-import { useParams } from 'next/navigation';
-import Link from 'next/link';
-import AnswerKeyInput from '@/components/ui/AnswerKeyInput';
-import AnswerKeyPreviewTable from '@/components/ui/AnswerKeyPreviewTable';
-import type { AnswerKey } from '@/lib/types';
+export default async function AnswerKeyPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const exam = await prisma.exam.findUnique({
+    where: { id },
+    include: {
+      classroom: { select: { name: true } },
+      answerKeys: { orderBy: { question: "asc" } },
+      questions: {
+        orderBy: { number: "asc" },
+        include: {
+          options: { orderBy: { createdAt: "asc" } },
+        },
+      },
+    },
+  });
 
-export default function AnswerKeyPage() {
-  const params = useParams();
-  const examId = params.id as string;
-  const [keys, setKeys] = useState<AnswerKey[]>([]);
-  const [saved, setSaved] = useState(false);
+  if (!exam) {
+    notFound();
+  }
 
-  const handleSave = () => {
-    if (keys.length === 0) return;
-    setSaved(true);
-    alert('Хариултын түлхүүр амжилттай хадгалагдлаа!');
-  };
+  const existingAnswers = new Map(
+    exam.answerKeys.map((item) => [item.question, item.answer])
+  );
+  const questions = exam.questions.map((question) => ({
+    id: question.id,
+    number: question.number,
+    text: question.text,
+    points: question.points,
+    options: question.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      text: option.text,
+      isCorrect: existingAnswers.get(question.number) === option.label || option.isCorrect,
+    })),
+  }));
+  const hasEmptyContent =
+    questions.length === 0 ||
+    questions.some(
+      (question) =>
+        !question.text.trim() ||
+        question.options.length < 2 ||
+        question.options.every((option) => !option.text.trim())
+    );
+  const hasNoParsedContent =
+    questions.length === 0 ||
+    questions.every(
+      (question) =>
+        !question.text.trim() &&
+        question.options.every((option) => !option.text.trim())
+    );
+  const shouldShowAiFailedState = Boolean(exam.materialUrl) && hasNoParsedContent;
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
-      <div className="max-w-2xl mx-auto mb-6">
-        <Link
-          href={`/exams/${examId}/setup`}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 hover:text-[#8B5E3C] transition-colors mb-4"
+      <div className="mx-auto max-w-4xl">
+        <PageHeader
+          eyebrow={exam.title}
+          title="Зөв хариу баталгаажуулах"
+          description="AI уншсан асуулт, сонголт, оноог шалгаад хадгална."
+          actions={
+            <>
+              <Link
+                href={`/exams/${exam.id}/submissions`}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#8B5E3C] px-4 py-2 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:bg-[#734d31]"
+              >
+                <UploadCloud className="size-4" aria-hidden="true" />
+                Хариулт оруулах
+              </Link>
+              <Link
+                href={`/exams/${exam.id}/results`}
+                className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              >
+                <BarChart3 className="size-4" aria-hidden="true" />
+                Үр дүн
+              </Link>
+            </>
+          }
         >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-          </svg>
-          Буцах
-        </Link>
+          <Link
+            href="/classrooms"
+            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-stone-500 transition-colors hover:text-[#8B5E3C]"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            Ангиуд руу буцах
+          </Link>
+          <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
+            <span>{exam.classroom.name}</span>
+            <span>·</span>
+            <span>{exam.subject}</span>
+            <span>·</span>
+            <span>{exam.questionCount} асуулт</span>
+          </div>
+        </PageHeader>
 
-        <h1 className="text-2xl font-bold text-stone-900 tracking-tight">Хариултын түлхүүр</h1>
-        <p className="text-sm text-stone-500 mt-1">
-          Шалгалтын зөв хариултуудыг оруулна уу.
-        </p>
-      </div>
+        <div className="mb-6 flex gap-3 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-stone-700">
+          <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-700" aria-hidden="true" />
+          <div>
+            <p>
+              AI шалгалтын бүтцийг уншсан. Одоо багш асуулт, сонголт, зөв хариулт болон оноог баталгаажуулна.
+            </p>
+            <p className="mt-2 font-medium">
+              AI-ийн санал болгосон зөв хариулт алдаатай байж болно. Эцсийн зөв хариултыг багш өөрөө баталгаажуулна.
+            </p>
+          </div>
+        </div>
 
-      <div className="max-w-2xl mx-auto space-y-6">
-        <AnswerKeyInput onParsed={(parsed) => { setKeys(parsed); setSaved(false); }} />
-
-        {keys.length > 0 && (
-          <>
-            <AnswerKeyPreviewTable keys={keys} />
-
-            <div className="flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => { setKeys([]); setSaved(false); }}
-                className="px-4 py-2 text-sm font-medium text-stone-700 bg-white border border-stone-300 rounded-lg hover:bg-stone-50 transition-colors"
-              >
-                Дахин оруулах
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saved}
-                className="px-5 py-2 text-sm font-medium text-white bg-[#8B5E3C] hover:bg-[#734d31] rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm flex items-center gap-2"
-              >
-                {saved ? (
-                  <>
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                    </svg>
-                    Хадгалсан
-                  </>
-                ) : (
-                  'Хадгалах'
-                )}
-              </button>
-            </div>
-          </>
+        {shouldShowAiFailedState ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+            <AlertCircle className="mb-4 size-8 text-amber-700" aria-hidden="true" />
+            <h2 className="text-lg font-bold text-stone-900">
+              AI шалгалтын материалыг уншиж чадсангүй.
+            </h2>
+            <p className="mt-2 text-sm text-stone-700">
+              Энэ шалгалтад асуулт, сонголтын текст үүсээгүй байна.
+            </p>
+            <p className="mt-1 text-sm text-stone-700">
+              Зураг тод эсэх, GEMINI_API_KEY тохиргоо болон файл оруулах талбарыг шалгаад дахин үүсгэнэ үү.
+            </p>
+            <Link
+              href={`/exams/new?classroomId=${exam.classroomId}`}
+              className="mt-5 inline-flex rounded-lg bg-[#8B5E3C] px-5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#734d31]"
+            >
+              Шинэ шалгалт үүсгэх
+            </Link>
+          </div>
+        ) : (
+          <AnswerKeyReviewForm
+            examId={exam.id}
+            questions={questions}
+            hasEmptyContent={hasEmptyContent}
+          />
         )}
       </div>
     </div>

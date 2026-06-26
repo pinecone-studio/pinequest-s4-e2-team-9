@@ -36,9 +36,35 @@ model Exam {
   classroom     Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   materialUrl   String?
   answerKeys    AnswerKey[]
+  questions     ExamQuestion[]
   submissions   Submission[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+}
+
+model ExamQuestion {
+  id        String       @id @default(cuid())
+  examId    String
+  exam      Exam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+  number    Int
+  text      String
+  points    Float        @default(1)
+  options   ExamOption[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([examId, number])
+}
+
+model ExamOption {
+  id         String       @id @default(cuid())
+  questionId String
+  question   ExamQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String
+  text       String
+  isCorrect  Boolean      @default(false)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 }
 
 model AnswerKey {
@@ -58,11 +84,16 @@ model Submission {
   studentId   String
   student     Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
   imageUrl    String?
-  score       Int
-  total       Int
-  percentage  Float
+  status      String             @default("DRAFT")
+  score       Float              @default(0)
+  total       Float              @default(0)
+  percentage  Float              @default(0)
   answers     SubmissionAnswer[]
   createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([examId])
+  @@index([studentId])
 }
 
 model SubmissionAnswer {
@@ -73,4 +104,10 @@ model SubmissionAnswer {
   selected     String
   correct      String
   isCorrect    Boolean
+  earnedPoints Float      @default(0)
+  maxPoints    Float      @default(1)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([submissionId])
 }

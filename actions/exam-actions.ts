@@ -1,0 +1,156 @@
+"use server";
+
+import { prisma } from "@/lib/prisma";
+import {
+  analyzeExamMaterial,
+  type ExamMaterialAnalysis,
+  type ExamMaterialQuestion,
+} from "@/lib/gemini-vision";
+import { SUBJECT_OPTIONS } from "@/lib/subjects";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+
+const defaultOptionLabels = ["A", "B", "C", "D"];
+
+export async function createExamAction(formData: FormData) {
+  const title = String(formData.get("title") || "").trim();
+  const subject = String(formData.get("subject") || "").trim();
+  const classroomId = String(formData.get("classroomId") || "").trim();
+  const manualQuestionCount = Number(formData.get("questionCount") || 0);
+  const material = formData.get("material");
+  const materialFile =
+    typeof File !== "undefined" && material instanceof File && material.size > 0
+      ? material
+      : null;
+
+  if (
+    !title ||
+    !subject ||
+    !SUBJECT_OPTIONS.includes(subject) ||
+    !classroomId
+  ) {
+    throw new Error("Шалгалтын мэдээлэл дутуу байна.");
+  }
+
+  if (
+    !materialFile &&
+    (!Number.isInteger(manualQuestionCount) || manualQuestionCount < 1)
+  ) {
+    throw new Error("Асуултын тоо дутуу байна.");
+  }
+
+  console.info("[createExamAction] material exists", Boolean(materialFile));
+
+  if (materialFile) {
+    console.info("[createExamAction] material name", materialFile.name);
+    console.info("[createExamAction] material type", materialFile.type);
+    console.info("[createExamAction] material size", materialFile.size);
+  }
+
+  let createdQuestionsCount = 0;
+  let examId = "";
+
+  if (materialFile) {
+    const analysis = await analyzeExamMaterial(materialFile);
+    console.info("[createExamAction] AI confidence", analysis.confidence);
+    console.info("[createExamAction] AI questionCount", analysis.questionCount);
+    console.info("[createExamAction] AI questions length", analysis.questions.length);
+    console.info("[createExamAction] first question", analysis.questions[0]);
+
+    if (analysis.questions.length === 0) {
+      redirect(`/exams/new?classroomId=${encodeURIComponent(classroomId)}&aiError=1`);
+    }
+
+    const questions = buildQuestions(analysis);
+    createdQuestionsCount = questions.length;
+
+    const exam = await prisma.exam.create({
+      data: {
+        title,
+        subject,
+        classroomId,
+        questionCount: questions.length,
+        // ponytail: demo stores the filename only; add object storage when teachers need to reopen files.
+        materialUrl: materialFile.name,
+        questions: { create: questions },
+      },
+    });
+    examId = exam.id;
+  } else {
+    const questions = buildBlankQuestions(manualQuestionCount);
+    createdQuestionsCount = questions.length;
+
+    const exam = await prisma.exam.create({
+      data: {
+        title,
+        subject,
+        classroomId,
+        questionCount: manualQuestionCount,
+        materialUrl: null,
+        questions: { create: questions },
+      },
+    });
+    examId = exam.id;
+  }
+
+  console.info("[createExamAction] created questions count", createdQuestionsCount);
+
+  revalidatePath("/dashboard");
+  revalidatePath("/classrooms");
+  revalidatePath(`/classrooms/${classroomId}`);
+  redirect(`/exams/${examId}/answer-key`);
+}
+
+function buildQuestions(analysis: ExamMaterialAnalysis) {
+  const usedNumbers = new Set<number>();
+
+  return analysis.questions.map((question, index) => {
+    const number = getUniqueQuestionNumber(question.number, index, usedNumbers);
+    const options = normalizeOptions(question.options);
+
+    return {
+      number,
+      text: question.text,
+      points: question.points && question.points > 0 ? question.points : 1,
+      options: { create: options },
+    };
+  });
+}
+
+function getUniqueQuestionNumber(number: number, index: number, usedNumbers: Set<number>) {
+  let candidate = Number.isInteger(number) && number > 0 ? number : index + 1;
+
+  while (usedNumbers.has(candidate)) {
+    candidate += 1;
+  }
+
+  usedNumbers.add(candidate);
+  return candidate;
+}
+
+function buildBlankQuestions(questionCount: number) {
+  return Array.from({ length: questionCount }, (_, index) => ({
+    number: index + 1,
+    text: "",
+    points: 1,
+    options: { create: normalizeOptions([]) },
+  }));
+}
+
+function normalizeOptions(options: ExamMaterialQuestion["options"]) {
+  const source = options.length
+    ? options
+    : defaultOptionLabels.map((label) => ({ label, text: "", isCorrect: false }));
+  let hasCorrect = false;
+
+  return source.map((option, index) => {
+    const isCorrect = option.isCorrect === true && !hasCorrect;
+    hasCorrect ||= isCorrect;
+
+    return {
+      label: option.label.trim() || defaultOptionLabels[index] || String(index + 1),
+      text: option.text.trim(),
+      isCorrect,
+    };
+  });
+}
