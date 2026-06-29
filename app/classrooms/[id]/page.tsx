@@ -5,6 +5,7 @@ import PageHeader from '@/components/layout/page-header';
 import AddStudentForm from '@/components/ui/AddStudentForm';
 import StudentTable from '@/components/ui/StudentTable';
 import { prisma } from '@/lib/prisma';
+import { requireCurrentUser } from '@/lib/supabase/server';
 
 export default async function ClassroomDetailPage({
   params,
@@ -12,14 +13,16 @@ export default async function ClassroomDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const classroom = await prisma.classroom.findUnique({
-    where: { id },
+  const user = await requireCurrentUser();
+  const classroom = await prisma.classroom.findFirst({
+    where: { id, ownerUserId: user.id },
     include: {
       students: {
         orderBy: { createdAt: 'asc' },
         select: { id: true, name: true },
       },
       exams: {
+        where: { ownerUserId: user.id },
         orderBy: { createdAt: 'desc' },
         select: {
           id: true,

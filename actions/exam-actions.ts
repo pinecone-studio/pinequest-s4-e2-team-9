@@ -6,13 +6,16 @@ import {
   type ExamMaterialAnalysis,
   type ExamMaterialQuestion,
 } from "@/lib/gemini-vision";
+import { generateCaptureToken } from "@/lib/capture-token";
 import { SUBJECT_OPTIONS } from "@/lib/subjects";
+import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 const defaultOptionLabels = ["A", "B", "C", "D"];
 
 export async function createExamAction(formData: FormData) {
+  const user = await requireCurrentUser();
   const title = String(formData.get("title") || "").trim();
   const subject = String(formData.get("subject") || "").trim();
   const classroomId = String(formData.get("classroomId") || "").trim();
@@ -37,6 +40,15 @@ export async function createExamAction(formData: FormData) {
     (!Number.isInteger(manualQuestionCount) || manualQuestionCount < 1)
   ) {
     throw new Error("Асуултын тоо дутуу байна.");
+  }
+
+  const classroom = await prisma.classroom.findFirst({
+    where: { id: classroomId, ownerUserId: user.id },
+    select: { id: true },
+  });
+
+  if (!classroom) {
+    throw new Error("Анги олдсонгүй.");
   }
 
   console.info("[createExamAction] material exists", Boolean(materialFile));
@@ -69,6 +81,8 @@ export async function createExamAction(formData: FormData) {
         title,
         subject,
         classroomId,
+        ownerUserId: user.id,
+        captureToken: generateCaptureToken(),
         questionCount: questions.length,
         // ponytail: demo stores the filename only; add object storage when teachers need to reopen files.
         materialUrl: materialFile.name,
@@ -85,6 +99,8 @@ export async function createExamAction(formData: FormData) {
         title,
         subject,
         classroomId,
+        ownerUserId: user.id,
+        captureToken: generateCaptureToken(),
         questionCount: manualQuestionCount,
         materialUrl: null,
         questions: { create: questions },

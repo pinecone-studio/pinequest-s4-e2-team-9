@@ -1,13 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { labelsMatch } from "@/lib/grading";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const exam = await prisma.exam.findUnique({
-    where: { id },
+  const user = await requireCurrentUser();
+  const exam = await prisma.exam.findFirst({
+    where: { id, ownerUserId: user.id },
     include: {
       classroom: true,
       answerKeys: { orderBy: { question: "asc" } },

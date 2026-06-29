@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, BarChart3, UploadCloud } from "lucide-react";
 import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
 import PageHeader from "@/components/layout/page-header";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function AnswerKeyPage({
   params,
@@ -11,8 +12,9 @@ export default async function AnswerKeyPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const exam = await prisma.exam.findUnique({
-    where: { id },
+  const user = await requireCurrentUser();
+  const exam = await prisma.exam.findFirst({
+    where: { id, ownerUserId: user.id },
     include: {
       classroom: { select: { name: true } },
       answerKeys: { orderBy: { question: "asc" } },

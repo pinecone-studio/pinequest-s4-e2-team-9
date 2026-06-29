@@ -8,13 +8,16 @@ datasource db {
 }
 
 model Classroom {
-  id        String    @id @default(cuid())
-  name      String
-  subject   String?
-  students  Student[]
-  exams     Exam[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  name        String
+  subject     String?
+  ownerUserId String?
+  students    Student[]
+  exams       Exam[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([ownerUserId])
 }
 
 model Student {
@@ -35,11 +38,15 @@ model Exam {
   classroomId   String
   classroom     Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   materialUrl   String?
+  ownerUserId   String?
+  captureToken  String?      @unique
   answerKeys    AnswerKey[]
   questions     ExamQuestion[]
   submissions   Submission[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+
+  @@index([ownerUserId])
 }
 
 model ExamQuestion {
