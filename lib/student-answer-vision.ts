@@ -90,12 +90,14 @@ Expected JSON: {"confidence":"medium","notes":"string","answers":[{"questionNumb
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0,
-        maxOutputTokens: 8192,
+        maxOutputTokens: 4096,
       },
     });
+    const generateStartedAt = Date.now();
     const result = await model.generateContent([{ text: prompt }, imagePart], {
       timeout: 90000,
     });
+    console.info(`[submission-speed] geminiGenerateMs=${Date.now() - generateStartedAt}`);
     const raw = result.response.text();
 
     console.info("[student-answer-vision] raw response first 500 chars", raw.slice(0, 500));

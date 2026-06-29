@@ -9,8 +9,13 @@ import { redirect } from "next/navigation";
 const imageTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
 export async function createSubmissionDraftAction(formData: FormData) {
+  const actionStartedAt = Date.now();
   const examId = String(formData.get("examId") || "").trim();
   const studentId = String(formData.get("studentId") || "").trim();
+  const originalImageSize = getPositiveNumber(formData.get("originalImageSize"));
+  const compressedImageSize = getPositiveNumber(formData.get("compressedImageSize"));
+  const originalMimeType = String(formData.get("originalMimeType") || "").trim();
+  const compressedMimeType = String(formData.get("compressedMimeType") || "").trim();
   const answerSheet = formData.get("answerSheet");
   const file =
     typeof File !== "undefined" && answerSheet instanceof File && answerSheet.size > 0
@@ -28,6 +33,10 @@ export async function createSubmissionDraftAction(formData: FormData) {
   if (!file || !imageTypes.has(file.type)) {
     redirect(`/exams/${examId}/submissions?error=file`);
   }
+
+  console.info(
+    `[submission-speed] upload name=${file.name} mime=${file.type} sizeBytes=${file.size} originalSizeBytes=${originalImageSize ?? "unknown"} compressedSizeBytes=${compressedImageSize ?? "unknown"} originalMime=${originalMimeType || "unknown"} compressedMime=${compressedMimeType || "unknown"}`
+  );
 
   const exam = await prisma.exam.findUnique({
     where: { id: examId },
@@ -60,40 +69,69 @@ export async function createSubmissionDraftAction(formData: FormData) {
       question.options.map((option) => option.label),
     ])
   );
+  const geminiStartedAt = Date.now();
   const analysis = await analyzeStudentAnswerSheet(
     file,
     questionNumbers,
     optionLabelsByQuestion
   );
+  console.info(`[submission-speed] geminiMs=${Date.now() - geminiStartedAt}`);
+
+  const gradingStartedAt = Date.now();
   const grading = gradeSubmission({
     questions: exam.questions,
     correctAnswers: exam.answerKeys,
     extractedAnswers: analysis.answers,
   });
-const submission = await prisma.$transaction(
-  async (tx) => {
-    const existingSubmission = await tx.submission.findFirst({
-      where: {
-        examId,
-        studentId,
-      },
-      select: {
-        id: true,
-      },
-    });
+  console.info(`[submission-speed] gradingMs=${Date.now() - gradingStartedAt}`);
 
-    if (existingSubmission) {
-      await tx.submissionAnswer.deleteMany({
+  const dbStartedAt = Date.now();
+  const submission = await prisma.$transaction(
+    async (tx) => {
+      const existingSubmission = await tx.submission.findFirst({
         where: {
-          submissionId: existingSubmission.id,
+          examId,
+          studentId,
+        },
+        select: {
+          id: true,
         },
       });
 
-      const updatedSubmission = await tx.submission.update({
-        where: {
-          id: existingSubmission.id,
-        },
+      if (existingSubmission) {
+        await tx.submissionAnswer.deleteMany({
+          where: {
+            submissionId: existingSubmission.id,
+          },
+        });
+
+        const updatedSubmission = await tx.submission.update({
+          where: {
+            id: existingSubmission.id,
+          },
+          data: {
+            imageUrl: file.name,
+            status: "DRAFT",
+            score: grading.totalScore,
+            total: grading.maxScore,
+            percentage: grading.percentage,
+          },
+        });
+
+        await tx.submissionAnswer.createMany({
+          data: grading.rows.map((row) => ({
+            ...toSubmissionAnswerCreate(row),
+            submissionId: updatedSubmission.id,
+          })),
+        });
+
+        return updatedSubmission;
+      }
+
+      const createdSubmission = await tx.submission.create({
         data: {
+          examId,
+          studentId,
           imageUrl: file.name,
           status: "DRAFT",
           score: grading.totalScore,
@@ -105,46 +143,27 @@ const submission = await prisma.$transaction(
       await tx.submissionAnswer.createMany({
         data: grading.rows.map((row) => ({
           ...toSubmissionAnswerCreate(row),
-          submissionId: updatedSubmission.id,
+          submissionId: createdSubmission.id,
         })),
       });
 
-      return updatedSubmission;
-    }
-
-    const createdSubmission = await tx.submission.create({
-      data: {
-        examId,
-        studentId,
-        imageUrl: file.name,
-        status: "DRAFT",
-        score: grading.totalScore,
-        total: grading.maxScore,
-        percentage: grading.percentage,
-      },
-    });
-
-    await tx.submissionAnswer.createMany({
-      data: grading.rows.map((row) => ({
-        ...toSubmissionAnswerCreate(row),
-        submissionId: createdSubmission.id,
-      })),
-    });
-
-    return createdSubmission;
-  },
-  { timeout: 30000 }
-);
+      return createdSubmission;
+    },
+    { timeout: 30000 }
+  );
+  console.info(`[submission-speed] dbSaveMs=${Date.now() - dbStartedAt}`);
 
   console.info("[createSubmissionDraftAction] AI confidence", analysis.confidence);
   console.info("[createSubmissionDraftAction] AI notes", analysis.notes);
   console.info("[createSubmissionDraftAction] answers length", analysis.answers.length);
 
   revalidatePath(`/exams/${examId}/submissions`);
+  console.info(`[submission-speed] fullSubmissionMs=${Date.now() - actionStartedAt}`);
   redirect(`/exams/${examId}/submissions/${submission.id}/review`);
 }
 
 export async function saveReviewedSubmissionAction(formData: FormData) {
+  const actionStartedAt = Date.now();
   const examId = String(formData.get("examId") || "").trim();
   const submissionId = String(formData.get("submissionId") || "").trim();
 
@@ -152,43 +171,70 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
     redirect("/dashboard");
   }
 
+  const loadStartedAt = Date.now();
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
-    include: {
+    select: {
+      examId: true,
       exam: {
-        include: {
-          answerKeys: { orderBy: { question: "asc" } },
+        select: {
+          answerKeys: {
+            orderBy: { question: "asc" },
+            select: { question: true, answer: true },
+          },
           questions: {
             orderBy: { number: "asc" },
-            include: { options: { orderBy: { createdAt: "asc" } } },
+            select: {
+              number: true,
+              points: true,
+              options: {
+                orderBy: { createdAt: "asc" },
+                select: { label: true, isCorrect: true },
+              },
+            },
           },
         },
       },
     },
   });
+  console.info(`[review-save-speed] loadSubmissionMs=${Date.now() - loadStartedAt}`);
 
   if (!submission || submission.examId !== examId) {
     redirect(`/exams/${examId}/submissions?error=submission`);
   }
 
+  const parseStartedAt = Date.now();
+  const extractedAnswers = submission.exam.questions.map((question) => ({
+    questionNumber: question.number,
+    selectedLabel: String(formData.get(`answer-${question.number}`) || "").trim(),
+  }));
+  console.info(`[review-save-speed] parseFormMs=${Date.now() - parseStartedAt}`);
+
+  const gradingStartedAt = Date.now();
   const grading = gradeSubmission({
     questions: submission.exam.questions,
     correctAnswers: submission.exam.answerKeys,
-    extractedAnswers: submission.exam.questions.map((question) => ({
-      questionNumber: question.number,
-      selectedLabel: String(formData.get(`answer-${question.number}`) || "").trim(),
-    })),
+    extractedAnswers,
   });
+  console.info(`[review-save-speed] gradingMs=${Date.now() - gradingStartedAt}`);
 
+  const transactionStartedAt = Date.now();
   await prisma.$transaction(
     async (tx) => {
+      const deleteStartedAt = Date.now();
       await tx.submissionAnswer.deleteMany({ where: { submissionId } });
+      console.info(`[review-save-speed] deleteAnswersMs=${Date.now() - deleteStartedAt}`);
+
+      const createStartedAt = Date.now();
       await tx.submissionAnswer.createMany({
         data: grading.rows.map((row) => ({
           submissionId,
           ...toSubmissionAnswerCreate(row),
         })),
       });
+      console.info(`[review-save-speed] createAnswersMs=${Date.now() - createStartedAt}`);
+
+      const updateStartedAt = Date.now();
       await tx.submission.update({
         where: { id: submissionId },
         data: {
@@ -198,12 +244,17 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
           percentage: grading.percentage,
         },
       });
+      console.info(`[review-save-speed] updateSubmissionMs=${Date.now() - updateStartedAt}`);
     },
     { timeout: 30000 }
   );
+  console.info(`[review-save-speed] dbTransactionMs=${Date.now() - transactionStartedAt}`);
 
+  const revalidateStartedAt = Date.now();
   revalidatePath(`/exams/${examId}/submissions`);
   revalidatePath(`/exams/${examId}/submissions/${submissionId}/review`);
+  console.info(`[review-save-speed] revalidateMs=${Date.now() - revalidateStartedAt}`);
+  console.info(`[review-save-speed] totalMs=${Date.now() - actionStartedAt}`);
   redirect(`/exams/${examId}/submissions?saved=1`);
 }
 
@@ -239,4 +290,10 @@ function toSubmissionAnswerCreate(row: {
     earnedPoints: row.earnedPoints,
     maxPoints: row.maxPoints,
   };
+}
+
+function getPositiveNumber(value: FormDataEntryValue | null) {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number > 0 ? number : null;
 }

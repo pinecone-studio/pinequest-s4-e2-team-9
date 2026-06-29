@@ -14,16 +14,41 @@ export default async function SubmissionReviewPage({
   const { id, submissionId } = await params;
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
-    include: {
+    select: {
+      id: true,
+      examId: true,
+      imageUrl: true,
+      status: true,
+      score: true,
+      total: true,
+      percentage: true,
       student: { select: { name: true } },
-      answers: { orderBy: { question: "asc" } },
+      answers: {
+        orderBy: { question: "asc" },
+        select: { question: true, selected: true },
+      },
       exam: {
-        include: {
+        select: {
+          id: true,
+          title: true,
+          subject: true,
           classroom: { select: { name: true } },
-          answerKeys: { orderBy: { question: "asc" } },
+          answerKeys: {
+            orderBy: { question: "asc" },
+            select: { question: true, answer: true },
+          },
           questions: {
             orderBy: { number: "asc" },
-            include: { options: { orderBy: { createdAt: "asc" } } },
+            select: {
+              id: true,
+              number: true,
+              text: true,
+              points: true,
+              options: {
+                orderBy: { createdAt: "asc" },
+                select: { label: true, text: true, isCorrect: true },
+              },
+            },
           },
         },
       },

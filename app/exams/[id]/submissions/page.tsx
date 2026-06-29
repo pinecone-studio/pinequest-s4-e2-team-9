@@ -1,10 +1,9 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, UploadCloud } from "lucide-react";
-import { createSubmissionDraftAction } from "@/actions/submission-actions";
+import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks } from "lucide-react";
+import SubmissionUploadForm from "@/components/exams/submission-upload-form";
 import PageHeader from "@/components/layout/page-header";
-import LoadingSubmitButton from "@/components/ui/loading-submit-button";
 import { prisma } from "@/lib/prisma";
 
 export default async function SubmissionsPage({
@@ -25,22 +24,42 @@ export default async function SubmissionsPage({
   const error = getQueryValue(query.error);
   const exam = await prisma.exam.findUnique({
     where: { id },
-    include: {
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      classroomId: true,
       classroom: {
-        include: {
+        select: {
+          name: true,
           students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
         },
       },
-      answerKeys: { orderBy: { question: "asc" } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       questions: {
         orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+        select: {
+          number: true,
+          points: true,
+          options: {
+            orderBy: { createdAt: "asc" },
+            select: { isCorrect: true },
+          },
+        },
       },
       submissions: {
         orderBy: { createdAt: "desc" },
-        include: {
+        select: {
+          id: true,
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          createdAt: true,
           student: { select: { name: true } },
-          answers: true,
         },
       },
     },
@@ -157,49 +176,11 @@ export default async function SubmissionsPage({
                 </Link>
               </div>
             ) : (
-              <form action={createSubmissionDraftAction} className="mt-5 space-y-5">
-                <input type="hidden" name="examId" value={exam.id} />
-                <div>
-                  <label htmlFor="studentId" className="mb-1.5 block text-sm font-semibold text-stone-700">
-                    Сурагч
-                  </label>
-                  <select
-                    id="studentId"
-                    name="studentId"
-                    required
-                    defaultValue=""
-                    className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
-                  >
-                    <option value="">Сурагч сонгох</option>
-                    {exam.classroom.students.map((student) => (
-                      <option key={student.id} value={student.id}>
-                        {student.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="answerSheet" className="mb-1.5 block text-sm font-semibold text-stone-700">
-                    Хариултын хуудасны зураг
-                  </label>
-                  <input
-                    id="answerSheet"
-                    name="answerSheet"
-                    required
-                    type="file"
-                    accept="image/png,image/jpeg,image/jpg,image/webp"
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
-                  />
-                </div>
-                <LoadingSubmitButton
-                  disabled={!isAnswerKeyReady}
-                  loadingText="Уншиж байна..."
-                  className="w-full px-5 py-2.5 text-sm font-medium"
-                >
-                  <UploadCloud className="size-4" aria-hidden="true" />
-                  AI-аар уншуулах
-                </LoadingSubmitButton>
-              </form>
+              <SubmissionUploadForm
+                examId={exam.id}
+                students={exam.classroom.students}
+                isAnswerKeyReady={isAnswerKeyReady}
+              />
             )}
           </section>
 

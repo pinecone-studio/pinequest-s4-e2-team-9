@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { ArrowLeft, Download, Inbox, ListChecks, UploadCloud } from "lucide-react";
+import ResultsRefreshPoller from "@/components/exams/results-refresh-poller";
 import PageHeader from "@/components/layout/page-header";
 import { prisma } from "@/lib/prisma";
 
@@ -110,6 +111,7 @@ export default async function ResultsPage({
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
+      <ResultsRefreshPoller />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -124,13 +126,13 @@ export default async function ResultsPage({
                 <UploadCloud className="size-4" aria-hidden="true" />
                 Хариултын хуудас оруулах
               </Link>
-              <Link
+              <a
                 href={`/exams/${exam.id}/results/export`}
                 className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
               >
                 <Download className="size-4" aria-hidden="true" />
                 Excel татах
-              </Link>
+              </a>
               <Link
                 href={`/exams/${exam.id}/answer-key`}
                 className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
