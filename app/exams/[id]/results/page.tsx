@@ -2,9 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { ArrowLeft, Download, Inbox, ListChecks, UploadCloud } from "lucide-react";
-import ResultsRefreshPoller from "@/components/exams/results-refresh-poller";
+import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import PageHeader from "@/components/layout/page-header";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function ResultsPage({
   params,
@@ -14,8 +15,9 @@ export default async function ResultsPage({
   await connection();
 
   const { id } = await params;
-  const exam = await prisma.exam.findUnique({
-    where: { id },
+  const user = await requireCurrentUser();
+  const exam = await prisma.exam.findFirst({
+    where: { id, ownerUserId: user.id },
     include: {
       classroom: {
         include: {
@@ -111,7 +113,7 @@ export default async function ResultsPage({
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
-      <ResultsRefreshPoller />
+      <SubmissionsRealtimeRefresh examId={exam.id} />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}

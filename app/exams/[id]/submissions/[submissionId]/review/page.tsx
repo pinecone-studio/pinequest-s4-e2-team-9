@@ -5,6 +5,7 @@ import SubmissionReviewForm from "@/components/exams/submission-review-form";
 import PageHeader from "@/components/layout/page-header";
 import { gradeSubmission } from "@/lib/grading";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionReviewPage({
   params,
@@ -12,8 +13,9 @@ export default async function SubmissionReviewPage({
   params: Promise<{ id: string; submissionId: string }>;
 }) {
   const { id, submissionId } = await params;
-  const submission = await prisma.submission.findUnique({
-    where: { id: submissionId },
+  const user = await requireCurrentUser();
+  const submission = await prisma.submission.findFirst({
+    where: { id: submissionId, examId: id, exam: { ownerUserId: user.id } },
     select: {
       id: true,
       examId: true,
@@ -55,7 +57,7 @@ export default async function SubmissionReviewPage({
     },
   });
 
-  if (!submission || submission.examId !== id) {
+  if (!submission) {
     notFound();
   }
 

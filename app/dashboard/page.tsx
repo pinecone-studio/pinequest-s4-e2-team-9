@@ -13,19 +13,22 @@ import {
 } from "lucide-react";
 import PageHeader from "@/components/layout/page-header";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function DashboardPage() {
   await connection();
 
+  const user = await requireCurrentUser();
   const [totalClasses, totalExams, savedSubmissions, recentExams] =
     await Promise.all([
-      prisma.classroom.count(),
-      prisma.exam.count(),
+      prisma.classroom.count({ where: { ownerUserId: user.id } }),
+      prisma.exam.count({ where: { ownerUserId: user.id } }),
       prisma.submission.findMany({
-        where: { status: "SAVED" },
+        where: { status: "SAVED", exam: { ownerUserId: user.id } },
         select: { percentage: true },
       }),
       prisma.exam.findMany({
+        where: { ownerUserId: user.id },
         orderBy: { createdAt: "desc" },
         take: 5,
         include: {

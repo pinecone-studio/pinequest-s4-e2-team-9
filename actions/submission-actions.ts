@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { gradeSubmission } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
+import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -16,6 +17,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
   const compressedImageSize = getPositiveNumber(formData.get("compressedImageSize"));
   const originalMimeType = String(formData.get("originalMimeType") || "").trim();
   const compressedMimeType = String(formData.get("compressedMimeType") || "").trim();
+  const captureToken = String(formData.get("captureToken") || "").trim();
   const answerSheet = formData.get("answerSheet");
   const file =
     typeof File !== "undefined" && answerSheet instanceof File && answerSheet.size > 0
@@ -26,20 +28,28 @@ export async function createSubmissionDraftAction(formData: FormData) {
     redirect("/dashboard");
   }
 
+  const user = captureToken ? null : await requireCurrentUser();
+  const returnPath = captureToken
+    ? `/exams/${examId}/capture?token=${encodeURIComponent(captureToken)}`
+    : `/exams/${examId}/submissions`;
+  const returnQuery = captureToken ? "&" : "?";
+
   if (!studentId) {
-    redirect(`/exams/${examId}/submissions?error=student`);
+    redirect(`${returnPath}${returnQuery}error=student`);
   }
 
   if (!file || !imageTypes.has(file.type)) {
-    redirect(`/exams/${examId}/submissions?error=file`);
+    redirect(`${returnPath}${returnQuery}error=file`);
   }
 
   console.info(
     `[submission-speed] upload name=${file.name} mime=${file.type} sizeBytes=${file.size} originalSizeBytes=${originalImageSize ?? "unknown"} compressedSizeBytes=${compressedImageSize ?? "unknown"} originalMime=${originalMimeType || "unknown"} compressedMime=${compressedMimeType || "unknown"}`
   );
 
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
+  const exam = await prisma.exam.findFirst({
+    where: captureToken
+      ? { id: examId, captureToken }
+      : { id: examId, ownerUserId: user?.id },
     include: {
       classroom: { include: { students: { select: { id: true } } } },
       answerKeys: { orderBy: { question: "asc" } },
@@ -51,15 +61,15 @@ export async function createSubmissionDraftAction(formData: FormData) {
   });
 
   if (!exam) {
-    redirect("/dashboard");
+    redirect(captureToken ? `/exams/${examId}/capture` : "/dashboard");
   }
 
   if (!exam.classroom.students.some((student) => student.id === studentId)) {
-    redirect(`/exams/${examId}/submissions?error=student`);
+    redirect(`${returnPath}${returnQuery}error=student`);
   }
 
   if (!isAnswerKeyReady(exam.questions, exam.answerKeys)) {
-    redirect(`/exams/${examId}/submissions?error=answerKey`);
+    redirect(`${returnPath}${returnQuery}error=answerKey`);
   }
 
   const questionNumbers = exam.questions.map((question) => question.number);
@@ -159,11 +169,16 @@ export async function createSubmissionDraftAction(formData: FormData) {
 
   revalidatePath(`/exams/${examId}/submissions`);
   console.info(`[submission-speed] fullSubmissionMs=${Date.now() - actionStartedAt}`);
+  if (captureToken) {
+    redirect(`${returnPath}&submitted=1`);
+  }
+
   redirect(`/exams/${examId}/submissions/${submission.id}/review`);
 }
 
 export async function saveReviewedSubmissionAction(formData: FormData) {
   const actionStartedAt = Date.now();
+  const user = await requireCurrentUser();
   const examId = String(formData.get("examId") || "").trim();
   const submissionId = String(formData.get("submissionId") || "").trim();
 
@@ -172,8 +187,8 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
   }
 
   const loadStartedAt = Date.now();
-  const submission = await prisma.submission.findUnique({
-    where: { id: submissionId },
+  const submission = await prisma.submission.findFirst({
+    where: { id: submissionId, examId, exam: { ownerUserId: user.id } },
     select: {
       examId: true,
       exam: {
@@ -199,7 +214,7 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
   });
   console.info(`[review-save-speed] loadSubmissionMs=${Date.now() - loadStartedAt}`);
 
-  if (!submission || submission.examId !== examId) {
+  if (!submission) {
     redirect(`/exams/${examId}/submissions?error=submission`);
   }
 

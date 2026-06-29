@@ -1,10 +1,14 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks } from "lucide-react";
+import QRCode from "react-qr-code";
+import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, Smartphone } from "lucide-react";
+import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import SubmissionUploadForm from "@/components/exams/submission-upload-form";
 import PageHeader from "@/components/layout/page-header";
+import { generateCaptureToken } from "@/lib/capture-token";
 import { prisma } from "@/lib/prisma";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionsPage({
   params,
@@ -22,13 +26,15 @@ export default async function SubmissionsPage({
   const query = await searchParams;
   const saved = getQueryValue(query.saved) === "1";
   const error = getQueryValue(query.error);
-  const exam = await prisma.exam.findUnique({
-    where: { id },
+  const user = await requireCurrentUser();
+  const exam = await prisma.exam.findFirst({
+    where: { id, ownerUserId: user.id },
     select: {
       id: true,
       title: true,
       subject: true,
       classroomId: true,
+      captureToken: true,
       classroom: {
         select: {
           name: true,
@@ -69,6 +75,15 @@ export default async function SubmissionsPage({
     notFound();
   }
 
+  const captureToken = exam.captureToken ?? generateCaptureToken();
+
+  if (!exam.captureToken) {
+    await prisma.exam.update({
+      where: { id: exam.id },
+      data: { captureToken },
+    });
+  }
+
   const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
   const isAnswerKeyReady = exam.questions.length > 0 && exam.questions.every(
     (question) =>
@@ -76,9 +91,11 @@ export default async function SubmissionsPage({
       exam.answerKeys.some((answer) => answer.question === question.number)
   );
   const savedCount = exam.submissions.filter((submission) => submission.status === "SAVED").length;
+  const captureLink = getCaptureLink(exam.id, captureToken);
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
+      <SubmissionsRealtimeRefresh examId={exam.id} />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -149,6 +166,52 @@ export default async function SubmissionsPage({
             </Link>
           </div>
         </div>
+
+        <section className="mb-6 rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Smartphone className="size-5 text-[#8B5E3C]" aria-hidden="true" />
+                <h2 className="text-lg font-bold text-stone-900">Утсаар зураг авах</h2>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                QR кодыг утсаараа уншуулж, сурагчийн хариултын хуудсыг камераар авна.
+              </p>
+              <p className="mt-3 text-xs font-medium uppercase tracking-wide text-stone-500">
+                Mobile capture URL
+              </p>
+              <code className="mt-1 block break-all rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-900">
+                {captureLink.path}
+              </code>
+              <input
+                aria-label="Mobile capture URL"
+                readOnly
+                value={captureLink.href}
+                className="mt-3 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700"
+              />
+              <p className="mt-2 text-xs text-stone-500">
+                Deployed demo дээр QR код public URL руу заана.
+              </p>
+            </div>
+
+            <div className="shrink-0">
+              {captureLink.isAbsolute ? (
+                <div className="rounded-lg border border-stone-200 bg-white p-3">
+                  <QRCode
+                    value={captureLink.href}
+                    size={148}
+                    title="Утасны камераар авах QR код"
+                    className="h-[148px] w-[148px]"
+                  />
+                </div>
+              ) : (
+                <div className="max-w-48 rounded-lg border border-dashed border-stone-300 bg-stone-50 p-4 text-sm leading-6 text-stone-600">
+                  NEXT_PUBLIC_APP_URL тохируулбал QR код энд харагдана.
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
 
         <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
           <section className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
@@ -273,6 +336,17 @@ function ErrorMessage({ error, examId }: { error: string; examId: string }) {
 
 function getQueryValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function getCaptureLink(examId: string, captureToken: string) {
+  const path = `/exams/${examId}/capture?token=${encodeURIComponent(captureToken)}`;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, "");
+
+  return {
+    path,
+    href: appUrl ? `${appUrl}${path}` : path,
+    isAbsolute: Boolean(appUrl),
+  };
 }
 
 function getStatusText(status: string) {

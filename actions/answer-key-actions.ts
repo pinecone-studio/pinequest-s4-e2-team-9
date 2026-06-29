@@ -2,18 +2,20 @@
 
 import { prisma } from "@/lib/prisma";
 import { isValidAnswerLabel, isValidOptionLabel } from "@/lib/answer-key-parser";
+import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function saveAnswerKeyAction(formData: FormData) {
+  const user = await requireCurrentUser();
   const examId = String(formData.get("examId") || "").trim();
 
   if (!examId) {
     throw new Error("Шалгалтын ID дутуу байна.");
   }
 
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
+  const exam = await prisma.exam.findFirst({
+    where: { id: examId, ownerUserId: user.id },
     include: {
       questions: {
         orderBy: { number: "asc" },

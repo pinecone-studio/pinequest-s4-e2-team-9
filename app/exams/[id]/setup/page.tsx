@@ -1,13 +1,26 @@
-'use client';
-
 import React from 'react';
-import { useParams } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import Link from 'next/link';
+import { prisma } from '@/lib/prisma';
+import { requireCurrentUser } from '@/lib/supabase/server';
 
-export default function ExamSetupPage() {
-  const params = useParams();
-  const examId = params.id as string;
-  const isNew = examId.startsWith('exam_');
+export default async function ExamSetupPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id: examId } = await params;
+  const user = await requireCurrentUser();
+  const exam = await prisma.exam.findFirst({
+    where: { id: examId, ownerUserId: user.id },
+    select: { id: true },
+  });
+
+  if (!exam) {
+    notFound();
+  }
+
+  const isNew = false;
 
   const steps = [
     {

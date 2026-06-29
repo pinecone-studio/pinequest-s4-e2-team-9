@@ -5,11 +5,14 @@ import PageHeader from '@/components/layout/page-header';
 import ClassroomCard from '@/components/ui/ClassroomCard';
 import EmptyClassroomState from '@/components/ui/EmptyClassroomState';
 import { prisma } from '@/lib/prisma';
+import { requireCurrentUser } from '@/lib/supabase/server';
 
 export default async function ClassroomsPage() {
   await connection();
 
+  const user = await requireCurrentUser();
   const classrooms = await prisma.classroom.findMany({
+    where: { ownerUserId: user.id },
     include: {
       students: true,
       exams: {

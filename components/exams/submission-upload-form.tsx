@@ -2,6 +2,7 @@
 
 import type { ChangeEvent } from "react";
 import { useState } from "react";
+import { useFormStatus } from "react-dom";
 import { UploadCloud } from "lucide-react";
 import { createSubmissionDraftAction } from "@/actions/submission-actions";
 import LoadingSubmitButton from "@/components/ui/loading-submit-button";
@@ -25,15 +26,24 @@ export default function SubmissionUploadForm({
   examId,
   students,
   isAnswerKeyReady,
+  variant = "desktop",
+  submitLabel = "AI-аар уншуулах",
+  loadingText = "Уншиж байна...",
+  captureToken,
 }: {
   examId: string;
   students: StudentOption[];
   isAnswerKeyReady: boolean;
+  variant?: "desktop" | "mobile";
+  submitLabel?: string;
+  loadingText?: string;
+  captureToken?: string;
 }) {
   const [original, setOriginal] = useState<FileInfo | null>(null);
   const [compressed, setCompressed] = useState<FileInfo | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   const [message, setMessage] = useState("");
+  const isMobile = variant === "mobile";
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
@@ -82,6 +92,7 @@ export default function SubmissionUploadForm({
       <input type="hidden" name="compressedImageSize" value={compressed?.size ?? ""} />
       <input type="hidden" name="originalMimeType" value={original?.type ?? ""} />
       <input type="hidden" name="compressedMimeType" value={compressed?.type ?? ""} />
+      {captureToken ? <input type="hidden" name="captureToken" value={captureToken} /> : null}
 
       <div>
         <label htmlFor="studentId" className="mb-1.5 block text-sm font-semibold text-stone-700">
@@ -112,7 +123,8 @@ export default function SubmissionUploadForm({
           name="answerSheet"
           required
           type="file"
-          accept="image/png,image/jpeg,image/jpg,image/webp"
+          accept={isMobile ? "image/*" : "image/png,image/jpeg,image/jpg,image/webp"}
+          capture={isMobile ? "environment" : undefined}
           onChange={handleFileChange}
           className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
         />
@@ -135,13 +147,29 @@ export default function SubmissionUploadForm({
 
       <LoadingSubmitButton
         disabled={!isAnswerKeyReady || isCompressing}
-        loadingText="Уншиж байна..."
-        className="w-full px-5 py-2.5 text-sm font-medium"
+        loadingText={loadingText}
+        className="min-h-11 w-full whitespace-normal px-5 py-2.5 text-sm font-medium"
       >
         <UploadCloud className="size-4" aria-hidden="true" />
-        {isCompressing ? "Зургийг багасгаж байна..." : "AI-аар уншуулах"}
+        {isCompressing ? "Зургийг багасгаж байна..." : submitLabel}
       </LoadingSubmitButton>
+      <SubmissionProgressText enabled={isMobile} />
     </form>
+  );
+}
+
+function SubmissionProgressText({ enabled }: { enabled: boolean }) {
+  const { pending } = useFormStatus();
+
+  if (!enabled || !pending) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-medium leading-6 text-stone-700" aria-live="polite">
+      <p>Зураг илгээгдэж байна...</p>
+      <p>AI хариултыг уншиж байна...</p>
+    </div>
   );
 }
 
