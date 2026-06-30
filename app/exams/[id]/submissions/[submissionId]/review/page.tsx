@@ -130,7 +130,7 @@ export default async function SubmissionReviewPage({
             <div>
               <p className="font-medium text-stone-500">Төлөв</p>
               <p className="mt-1 font-semibold text-stone-900">
-                {submission.status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай"}
+                {getStatusText(submission.status)}
               </p>
             </div>
             <div>
@@ -154,4 +154,16 @@ export default async function SubmissionReviewPage({
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function getStatusText(status: string) {
+  if (status === "PROCESSING") {
+    return "Боловсруулж байна...";
+  }
+
+  if (status === "FAILED") {
+    return "Алдаа гарсан";
+  }
+
+  return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
 }

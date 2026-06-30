@@ -170,7 +170,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
   revalidatePath(`/exams/${examId}/submissions`);
   console.info(`[submission-speed] fullSubmissionMs=${Date.now() - actionStartedAt}`);
   if (captureToken) {
-    redirect(`${returnPath}&submitted=1`);
+    redirect(`${returnPath}&submitted=1&submissionId=${encodeURIComponent(submission.id)}`);
   }
 
   redirect(`/exams/${examId}/submissions/${submission.id}/review`);

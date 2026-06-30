@@ -350,13 +350,31 @@ function getCaptureLink(examId: string, captureToken: string) {
 }
 
 function getStatusText(status: string) {
+  if (status === "PROCESSING") {
+    return "Боловсруулж байна...";
+  }
+
+  if (status === "FAILED") {
+    return "Алдаа гарсан";
+  }
+
   return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
 }
 
 function getStatusClass(status: string) {
-  return status === "SAVED"
-    ? "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800"
-    : "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
+  if (status === "SAVED") {
+    return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
+  }
+
+  if (status === "PROCESSING") {
+    return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
+  }
+
+  if (status === "FAILED") {
+    return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
+  }
+
+  return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
 }
 
 function formatNumber(value: number) {

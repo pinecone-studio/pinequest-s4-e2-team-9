@@ -16,6 +16,26 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Supabase Realtime
+
+Exam auto-refresh uses Broadcast first, so capture success can refresh the teacher page even if Postgres Changes is not configured. Postgres Changes is still useful as a secondary signal.
+
+Check whether `public."Submission"` is in the realtime publication:
+
+```sql
+select *
+from pg_publication_tables
+where pubname = 'supabase_realtime'
+  and schemaname = 'public'
+  and tablename = 'Submission';
+```
+
+If it is missing, add it:
+
+```sql
+alter publication supabase_realtime add table public."Submission";
+```
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

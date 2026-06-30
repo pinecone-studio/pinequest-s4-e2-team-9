@@ -107,6 +107,14 @@ function toCsv(rows: string[][]) {
 }
 
 function getStatusText(status: string | null | undefined) {
+  if (status === "PROCESSING") {
+    return "Боловсруулж байна...";
+  }
+
+  if (status === "FAILED") {
+    return "Алдаа гарсан";
+  }
+
   if (status === "DRAFT") {
     return "Хянах шаардлагатай";
   }

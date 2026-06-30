@@ -324,6 +324,14 @@ export default async function ResultsPage({
 }
 
 function getStatusText(status: string | null | undefined) {
+  if (status === "PROCESSING") {
+    return "Боловсруулж байна...";
+  }
+
+  if (status === "FAILED") {
+    return "Алдаа гарсан";
+  }
+
   if (status === "DRAFT") {
     return "Хянах шаардлагатай";
   }
@@ -338,6 +346,14 @@ function getStatusText(status: string | null | undefined) {
 function getStatusClass(status: string | null | undefined) {
   if (status === "SAVED") {
     return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
+  }
+
+  if (status === "PROCESSING") {
+    return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
+  }
+
+  if (status === "FAILED") {
+    return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
   }
 
   if (status === "DRAFT") {
