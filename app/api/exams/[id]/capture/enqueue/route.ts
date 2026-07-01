@@ -38,7 +38,10 @@ export async function POST(
       select: {
         id: true,
         classroom: { select: { students: { select: { id: true } } } },
-        answerKeys: { orderBy: { question: "asc" } },
+        answerKeys: {
+          orderBy: { question: "asc" },
+          select: { question: true, answer: true },
+        },
         questions: {
           orderBy: { number: "asc" },
           select: {

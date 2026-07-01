@@ -75,23 +75,37 @@ export function buildSubmissionsSignature(submissions: SubmissionStateRow[]) {
 }
 
 export function summarizeSubmissions(submissions: SubmissionStateRow[]) {
-  const latestUpdatedAt =
-    submissions
-      .map((submission) => toDateToken(submission.updatedAt ?? submission.createdAt))
-      .filter(Boolean)
-      .sort()
-      .at(-1) || null;
+  let active = 0;
+  let completed = 0;
+  let needsReview = 0;
+  let failed = 0;
+  let latestUpdatedAt: string | null = null;
+
+  for (const submission of submissions) {
+    const updatedAt = toDateToken(submission.updatedAt ?? submission.createdAt);
+
+    if (updatedAt && (!latestUpdatedAt || updatedAt > latestUpdatedAt)) {
+      latestUpdatedAt = updatedAt;
+    }
+
+    if (isActiveSubmissionStatus(submission.status)) {
+      active += 1;
+    } else if (submission.status === submissionStatuses.saved) {
+      completed += 1;
+    } else if (submission.status === submissionStatuses.draft) {
+      needsReview += 1;
+    } else if (submission.status === submissionStatuses.failed) {
+      failed += 1;
+    }
+  }
 
   return {
     signature: buildSubmissionsSignature(submissions),
     total: submissions.length,
-    active: submissions.filter((submission) => isActiveSubmissionStatus(submission.status)).length,
-    completed: submissions.filter((submission) => submission.status === submissionStatuses.saved)
-      .length,
-    needsReview: submissions.filter((submission) => submission.status === submissionStatuses.draft)
-      .length,
-    failed: submissions.filter((submission) => submission.status === submissionStatuses.failed)
-      .length,
+    active,
+    completed,
+    needsReview,
+    failed,
     latestUpdatedAt,
   };
 }

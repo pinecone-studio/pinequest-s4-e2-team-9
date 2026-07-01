@@ -58,12 +58,22 @@ export async function createSubmissionDraftAction(formData: FormData) {
     where: captureToken
       ? { id: examId, captureToken }
       : { id: examId, ownerUserId: user?.id },
-    include: {
-      classroom: { include: { students: { select: { id: true } } } },
-      answerKeys: { orderBy: { question: "asc" } },
+    select: {
+      classroom: { select: { students: { select: { id: true } } } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       questions: {
         orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+        select: {
+          number: true,
+          points: true,
+          options: {
+            orderBy: { createdAt: "asc" },
+            select: { label: true, isCorrect: true },
+          },
+        },
       },
     },
   });

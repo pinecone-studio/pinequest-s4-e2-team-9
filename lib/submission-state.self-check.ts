@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { decideProcessedSubmissionStatus, submissionStatuses } from "./submission-state";
+import {
+  decideProcessedSubmissionStatus,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "./submission-state";
 
 const questionNumbers = [1, 2, 3, 4];
 const optionLabelsByQuestion = {
@@ -51,3 +55,16 @@ const lowConfidence = decideProcessedSubmissionStatus({
 assert.equal(confident.status, submissionStatuses.saved);
 assert.equal(invalid.status, submissionStatuses.draft);
 assert.equal(lowConfidence.status, submissionStatuses.draft);
+
+const summary = summarizeSubmissions([
+  { id: "1", status: submissionStatuses.processing, updatedAt: "2026-01-01T00:00:00.000Z" },
+  { id: "2", status: submissionStatuses.saved, updatedAt: "2026-01-02T00:00:00.000Z" },
+  { id: "3", status: submissionStatuses.draft, updatedAt: "2026-01-03T00:00:00.000Z" },
+  { id: "4", status: submissionStatuses.failed, updatedAt: "2026-01-04T00:00:00.000Z" },
+]);
+
+assert.equal(summary.active, 1);
+assert.equal(summary.completed, 1);
+assert.equal(summary.needsReview, 1);
+assert.equal(summary.failed, 1);
+assert.equal(summary.latestUpdatedAt, "2026-01-04T00:00:00.000Z");

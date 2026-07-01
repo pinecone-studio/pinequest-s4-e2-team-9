@@ -30,6 +30,12 @@ export default function SubmissionsRealtimeRefresh({
 
   useEffect(() => {
     let cancelled = false;
+    const getDelay = () =>
+      document.visibilityState === "hidden"
+        ? 30000
+        : activeRef.current
+          ? 2000
+          : 6500;
 
     const schedule = (delay: number) => {
       if (timeoutRef.current) {
@@ -45,7 +51,7 @@ export default function SubmissionsRealtimeRefresh({
       }
 
       if (inFlightRef.current) {
-        schedule(activeRef.current ? 2000 : 6500);
+        schedule(getDelay());
         return;
       }
 
@@ -80,20 +86,21 @@ export default function SubmissionsRealtimeRefresh({
         inFlightRef.current = null;
 
         if (!cancelled) {
-          schedule(activeRef.current ? 2000 : 6500);
+          schedule(getDelay());
         }
       }
     };
 
     const pollNow = () => {
       if (document.visibilityState === "hidden") {
+        schedule(getDelay());
         return;
       }
 
       schedule(0);
     };
 
-    schedule(activeRef.current ? 1500 : 6500);
+    schedule(document.visibilityState === "hidden" ? getDelay() : 1500);
     window.addEventListener("focus", pollNow);
     document.addEventListener("visibilitychange", pollNow);
 

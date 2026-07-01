@@ -73,6 +73,8 @@ export default function OriginalMaterialPreview({
           <img
             src={previewUrl}
             alt="Шалгалтын эх материал"
+            loading="lazy"
+            decoding="async"
             className="mx-auto h-auto max-w-full"
             onError={() => setImageFailed(true)}
           />
@@ -81,6 +83,7 @@ export default function OriginalMaterialPreview({
         <iframe
           src={previewUrl}
           title="Шалгалтын эх материал"
+          loading="lazy"
           className="h-[calc(100vh-220px)] min-h-[420px] w-full rounded-lg border border-stone-200 bg-stone-50"
         />
       ) : (

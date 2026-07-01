@@ -34,7 +34,10 @@ export async function POST(
         status: true,
         exam: {
           select: {
-            answerKeys: { orderBy: { question: "asc" } },
+            answerKeys: {
+              orderBy: { question: "asc" },
+              select: { question: true, answer: true },
+            },
             questions: {
               orderBy: { number: "asc" },
               select: {

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { isValidAnswerLabel, isValidOptionLabel } from "@/lib/answer-key-parser";
 import { msSince, perfLog } from "@/lib/perf";
+import { regradeExamSubmissions } from "@/lib/regrading";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -169,12 +170,17 @@ export async function saveAnswerKeyAction(formData: FormData) {
   );
   const transactionMs = msSince(transactionStartedAt);
 
+  const regradeStartedAt = Date.now();
+  const regradeResult = await regradeExamSubmissions(examId);
+  const regradeMs = msSince(regradeStartedAt);
+
   console.info("[saveAnswerKeyAction] save completed");
 
   const revalidateStartedAt = Date.now();
   revalidatePath(`/exams/${examId}/answer-key`);
   revalidatePath(`/exams/${examId}/submissions`);
   revalidatePath(`/exams/${examId}/results`);
+  revalidatePath("/dashboard");
   const revalidateMs = msSince(revalidateStartedAt);
   perfLog("answer-key-save", {
     authMs,
@@ -183,6 +189,8 @@ export async function saveAnswerKeyAction(formData: FormData) {
     questionUpdates: questionUpdates.length,
     optionUpdates: optionUpdates.length,
     transactionMs,
+    regradeMs,
+    regradedSubmissions: regradeResult.regraded,
     revalidateMs,
     totalMs: msSince(totalStartedAt),
   });

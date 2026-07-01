@@ -91,52 +91,6 @@ export default function PhoneCaptureQueue({
     [setQueue]
   );
 
-  const sendSubmissionBroadcast = useCallback(
-    (payload: { submissionId?: string; studentId: string; status: string }) => {
-      void import("@/lib/supabase-client")
-        .then(({ supabaseClient }) => {
-          const channel = supabaseClient.channel(`exam-submissions:${examId}`, {
-            config: { broadcast: { ack: true, self: false } },
-          });
-          let cleanedUp = false;
-          const cleanup = () => {
-            if (cleanedUp) {
-              return;
-            }
-
-            cleanedUp = true;
-            window.clearTimeout(timeout);
-            void supabaseClient.removeChannel(channel);
-          };
-          const timeout = window.setTimeout(cleanup, 5000);
-
-          channel.subscribe(async (status) => {
-            if (status !== "SUBSCRIBED" || cleanedUp) {
-              return;
-            }
-
-            await channel.send({
-              type: "broadcast",
-              event: "submission_changed",
-              payload: {
-                examId,
-                submissionId: payload.submissionId,
-                studentId: payload.studentId,
-                status: payload.status,
-                timestamp: Date.now(),
-                source: "capture-queue",
-              },
-            });
-            cleanup();
-          });
-        })
-        .catch((error: unknown) => {
-          console.warn("[capture-queue] realtime broadcast skipped", error);
-        });
-    },
-    [examId]
-  );
-
   const triggerProcessing = useCallback(
     (item: QueueItem, submissionId: string) => {
       log(`[capture-queue] process trigger submissionId=${submissionId}`);
@@ -156,25 +110,15 @@ export default function PhoneCaptureQueue({
             status: "done",
             error: "",
           });
-          sendSubmissionBroadcast({
-            submissionId,
-            studentId: item.studentId,
-            status: data?.status || "DRAFT",
-          });
         })
         .catch((error: unknown) => {
           patchItem(item.localId, {
             status: "failed",
             error: getErrorMessage(error),
           });
-          sendSubmissionBroadcast({
-            submissionId,
-            studentId: item.studentId,
-            status: "FAILED",
-          });
         });
     },
-    [captureToken, patchItem, sendSubmissionBroadcast]
+    [captureToken, patchItem]
   );
 
   const uploadQueueItem = useCallback(
@@ -206,18 +150,12 @@ export default function PhoneCaptureQueue({
         submissionId: data.submissionId,
         error: "",
       });
-      sendSubmissionBroadcast({
-        submissionId: data.submissionId,
-        studentId: item.studentId,
-        status: data.status || "PROCESSING",
-      });
       triggerProcessing(item, data.submissionId);
     },
     [
       captureToken,
       examId,
       patchItem,
-      sendSubmissionBroadcast,
       triggerProcessing,
     ]
   );
@@ -302,11 +240,7 @@ export default function PhoneCaptureQueue({
       return;
     }
 
-    console.log("enqueue payload", {
-      examId,
-      selectedStudentId: currentSelectedStudentId,
-      fileName: file.name,
-    });
+    log(`[capture-queue] enqueue examId=${examId} studentId=${currentSelectedStudentId} file=${file.name}`);
 
     const localId = randomId();
     const clientSubmissionKey = randomId();
@@ -372,11 +306,7 @@ export default function PhoneCaptureQueue({
   function selectStudent(studentId: string, source: string) {
     const student = students.find((item) => item.id === studentId);
 
-    console.log("SELECT_STUDENT_CALLED", {
-      source,
-      studentId,
-      studentName: student?.name,
-    });
+    log(`[capture-student] source=${source} studentId=${studentId} name=${student?.name ?? ""}`);
 
     selectedStudentIdRef.current = studentId;
     setSelectedStudentIdRefValue(studentId);
@@ -411,10 +341,7 @@ export default function PhoneCaptureQueue({
     const currentSelectedStudentId = selectedStudentIdRef.current || selectedStudentId;
 
     setLastEvent(`${source} clicked`);
-    console.log(`${source} clicked`, {
-      selectedStudentId: currentSelectedStudentId,
-      isAnswerKeyReady,
-    });
+    log(`[capture-picker] source=${source} studentId=${currentSelectedStudentId} ready=${isAnswerKeyReady}`);
 
     if (!isAnswerKeyReady) {
       setMessage("Эхлээд хариултын түлхүүрээ баталгаажуулна уу.");
@@ -427,7 +354,7 @@ export default function PhoneCaptureQueue({
     }
 
     setMessage("Зураг сонгоно уу.");
-    console.log("triggering file input");
+    log("[capture-picker] triggering file input");
     (source === "camera" ? cameraInputRef : galleryInputRef).current?.click();
   }
 

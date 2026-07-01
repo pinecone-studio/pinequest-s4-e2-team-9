@@ -23,7 +23,6 @@ export async function GET(
           score: true,
           total: true,
           percentage: true,
-          createdAt: true,
           updatedAt: true,
         },
       },

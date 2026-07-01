@@ -30,7 +30,10 @@ export default async function AnswerKeyPage({
       materialUrl: true,
       questionCount: true,
       classroom: { select: { name: true } },
-      answerKeys: { orderBy: { question: "asc" } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       questions: {
         orderBy: { number: "asc" },
         select: {
