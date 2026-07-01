@@ -6,6 +6,11 @@ import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-
 import PageHeader from "@/components/layout/page-header";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import {
+  getSubmissionStatusText,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function ResultsPage({
@@ -74,8 +79,9 @@ export default async function ResultsPage({
     (sum, question) => sum + safeNumber(question.points),
     0
   );
+  const submissionSummary = summarizeSubmissions(exam.submissions);
   const savedSubmissions = exam.submissions.filter(
-    (submission) => submission.status === "SAVED"
+    (submission) => submission.status === submissionStatuses.saved
   );
   const scoredSubmissions = savedSubmissions.map((submission) => ({
     score: safeNumber(submission.score),
@@ -136,7 +142,11 @@ export default async function ResultsPage({
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
-      <SubmissionsRealtimeRefresh examId={exam.id} />
+      <SubmissionsRealtimeRefresh
+        examId={exam.id}
+        initialSignature={submissionSummary.signature}
+        hasActiveSubmissions={submissionSummary.active > 0}
+      />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -266,7 +276,7 @@ export default async function ResultsPage({
                         <td className="px-4 py-3">{Math.round(percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
-                            {getStatusText(submission.status)}
+                            {getSubmissionStatusText(submission.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -346,40 +356,20 @@ export default async function ResultsPage({
   );
 }
 
-function getStatusText(status: string | null | undefined) {
-  if (status === "PROCESSING") {
-    return "Боловсруулж байна...";
-  }
-
-  if (status === "FAILED") {
-    return "Алдаа гарсан";
-  }
-
-  if (status === "DRAFT") {
-    return "Хянах шаардлагатай";
-  }
-
-  if (status === "SAVED") {
-    return "Хадгалсан";
-  }
-
-  return status || "Тодорхойгүй";
-}
-
 function getStatusClass(status: string | null | undefined) {
-  if (status === "SAVED") {
+  if (status === submissionStatuses.saved) {
     return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
   }
 
-  if (status === "PROCESSING") {
+  if (status === submissionStatuses.processing) {
     return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
   }
 
-  if (status === "FAILED") {
+  if (status === submissionStatuses.failed) {
     return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
   }
 
-  if (status === "DRAFT") {
+  if (status === submissionStatuses.draft) {
     return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
   }
 

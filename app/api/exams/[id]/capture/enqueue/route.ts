@@ -111,6 +111,7 @@ export async function POST(
     const dbMs = msSince(dbStartedAt);
 
     revalidatePath(`/exams/${examId}/submissions`);
+    revalidatePath(`/exams/${examId}/results`);
     perfLog("capture-enqueue", {
       formMs,
       examMs,

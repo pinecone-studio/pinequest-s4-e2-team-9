@@ -8,6 +8,7 @@ import { gradeSubmission } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { getSubmissionImagePreview } from "@/lib/submission-image-storage";
+import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionReviewPage({
@@ -153,7 +154,7 @@ export default async function SubmissionReviewPage({
             <div>
               <p className="font-medium text-stone-500">Төлөв</p>
               <p className="mt-1 font-semibold text-stone-900">
-                {getStatusText(submission.status)}
+                {getSubmissionStatusText(submission.status)}
               </p>
             </div>
             <div>
@@ -184,16 +185,4 @@ export default async function SubmissionReviewPage({
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function getStatusText(status: string) {
-  if (status === "PROCESSING") {
-    return "Боловсруулж байна...";
-  }
-
-  if (status === "FAILED") {
-    return "Алдаа гарсан";
-  }
-
-  return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
 }

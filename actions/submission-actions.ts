@@ -7,6 +7,10 @@ import { gradeSubmission } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
 import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
 import { msSince, perfLog } from "@/lib/perf";
+import {
+  decideProcessedSubmissionStatus,
+  submissionStatuses,
+} from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -72,7 +76,9 @@ export async function createSubmissionDraftAction(formData: FormData) {
     redirect(`${returnPath}${returnQuery}error=student`);
   }
 
-  if (!isAnswerKeyReady(exam.questions, exam.answerKeys)) {
+  const answerKeyReady = isAnswerKeyReady(exam.questions, exam.answerKeys);
+
+  if (!answerKeyReady) {
     redirect(`${returnPath}${returnQuery}error=answerKey`);
   }
 
@@ -96,6 +102,12 @@ export async function createSubmissionDraftAction(formData: FormData) {
     questions: exam.questions,
     correctAnswers: exam.answerKeys,
     extractedAnswers: analysis.answers,
+  });
+  const statusDecision = decideProcessedSubmissionStatus({
+    analysis,
+    questionNumbers,
+    optionLabelsByQuestion,
+    answerKeyReady,
   });
   console.info(`[submission-speed] gradingMs=${Date.now() - gradingStartedAt}`);
 
@@ -130,7 +142,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
           },
           data: {
             imageUrl,
-            status: "DRAFT",
+            status: statusDecision.status,
             score: grading.totalScore,
             total: grading.maxScore,
             percentage: grading.percentage,
@@ -152,7 +164,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
           examId,
           studentId,
           imageUrl,
-          status: "DRAFT",
+          status: statusDecision.status,
           score: grading.totalScore,
           total: grading.maxScore,
           percentage: grading.percentage,
@@ -175,14 +187,20 @@ export async function createSubmissionDraftAction(formData: FormData) {
   console.info("[createSubmissionDraftAction] AI confidence", analysis.confidence);
   console.info("[createSubmissionDraftAction] AI notes", analysis.notes);
   console.info("[createSubmissionDraftAction] answers length", analysis.answers.length);
+  console.info("[createSubmissionDraftAction] status decision", statusDecision);
 
   revalidatePath(`/exams/${examId}/submissions`);
+  revalidatePath(`/exams/${examId}/results`);
   console.info(`[submission-speed] fullSubmissionMs=${Date.now() - actionStartedAt}`);
   if (captureToken) {
     redirect(`${returnPath}&submitted=1&submissionId=${encodeURIComponent(submission.id)}`);
   }
 
-  redirect(`/exams/${examId}/submissions/${submission.id}/review`);
+  redirect(
+    statusDecision.status === submissionStatuses.saved
+      ? `/exams/${examId}/submissions?saved=1`
+      : `/exams/${examId}/submissions/${submission.id}/review`
+  );
 }
 
 export async function saveReviewedSubmissionAction(formData: FormData) {

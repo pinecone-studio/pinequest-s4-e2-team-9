@@ -133,7 +133,7 @@ function parseAnalysis(
   }
 
   return {
-    confidence: normalizeConfidence(parsed.confidence),
+    confidence: normalizeConfidence(parsed.confidence) ?? "medium",
     notes:
       typeof parsed.notes === "string" && parsed.notes.trim()
         ? parsed.notes.trim()
@@ -181,17 +181,18 @@ function normalizeAnswers(
       typeof item.selectedLabel === "string"
         ? findOptionLabel(item.selectedLabel, optionLabelsByQuestion[questionNumber] ?? [])
         : null;
+    const confidence = normalizeConfidence(item.confidence);
 
     return {
       questionNumber,
       selectedLabel: selectedLabel || null,
-      confidence: normalizeConfidence(item.confidence),
+      ...(confidence ? { confidence } : {}),
     };
   });
 }
 
-function normalizeConfidence(value: unknown): Confidence {
-  return value === "high" || value === "medium" ? value : "low";
+function normalizeConfidence(value: unknown): Confidence | null {
+  return value === "high" || value === "medium" || value === "low" ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

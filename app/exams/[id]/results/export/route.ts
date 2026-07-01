@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { labelsMatch } from "@/lib/grading";
 import { msSince, perfLog } from "@/lib/perf";
+import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export async function GET(
@@ -96,7 +97,7 @@ export async function GET(
     formatNumber(safeNumber(submission.score)),
     formatNumber(getSubmissionTotal(submission, totalPoints)),
     `${Math.round(getSubmissionPercentage(submission, totalPoints))}%`,
-    getStatusText(submission.status),
+    getSubmissionStatusText(submission.status),
     (submission.updatedAt || submission.createdAt).toLocaleDateString("mn-MN"),
     ...exam.questions.map((question) => {
       const answer = submission.answers.find(
@@ -142,26 +143,6 @@ function toCsv(rows: string[][]) {
         .join(",")
     )
     .join("\r\n");
-}
-
-function getStatusText(status: string | null | undefined) {
-  if (status === "PROCESSING") {
-    return "Боловсруулж байна...";
-  }
-
-  if (status === "FAILED") {
-    return "Алдаа гарсан";
-  }
-
-  if (status === "DRAFT") {
-    return "Хянах шаардлагатай";
-  }
-
-  if (status === "SAVED") {
-    return "Хадгалсан";
-  }
-
-  return status || "Тодорхойгүй";
 }
 
 function getSubmissionTotal(submission: { total: number }, fallbackTotal: number) {

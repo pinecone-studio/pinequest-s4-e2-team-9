@@ -9,6 +9,11 @@ import PageHeader from "@/components/layout/page-header";
 import { generateCaptureToken } from "@/lib/capture-token";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import {
+  getSubmissionStatusText,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionsPage({
@@ -60,6 +65,7 @@ export default async function SubmissionsPage({
           total: true,
           percentage: true,
           createdAt: true,
+          updatedAt: true,
           student: { select: { id: true, name: true } },
         },
       },
@@ -88,7 +94,8 @@ export default async function SubmissionsPage({
   const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
   const isAnswerKeyReady =
     exam._count.questions > 0 && exam._count.answerKeys >= exam._count.questions;
-  const savedCount = exam.submissions.filter((submission) => submission.status === "SAVED").length;
+  const submissionSummary = summarizeSubmissions(exam.submissions);
+  const savedCount = submissionSummary.completed;
   const captureLink = getCaptureLink(exam.id, captureToken);
   perfLog("submissions-page", {
     authMs,
@@ -100,7 +107,11 @@ export default async function SubmissionsPage({
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
-      <SubmissionsRealtimeRefresh examId={exam.id} />
+      <SubmissionsRealtimeRefresh
+        examId={exam.id}
+        initialSignature={submissionSummary.signature}
+        hasActiveSubmissions={submissionSummary.active > 0}
+      />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -289,7 +300,7 @@ export default async function SubmissionsPage({
                         <td className="px-4 py-3">{Math.round(submission.percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
-                            {getStatusText(submission.status)}
+                            {getSubmissionStatusText(submission.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3">{submission.createdAt.toLocaleDateString("mn-MN")}</td>
@@ -298,7 +309,7 @@ export default async function SubmissionsPage({
                             href={`/exams/${exam.id}/submissions/${submission.id}/review`}
                             className="text-sm font-medium text-[#8B5E3C] hover:text-[#734d31]"
                           >
-                            {submission.status === "SAVED" ? "Харах" : "Засах"}
+                            {submission.status === submissionStatuses.saved ? "Харах" : "Засах"}
                           </Link>
                         </td>
                       </tr>
@@ -354,28 +365,16 @@ function getCaptureLink(examId: string, captureToken: string) {
   };
 }
 
-function getStatusText(status: string) {
-  if (status === "PROCESSING") {
-    return "Боловсруулж байна...";
-  }
-
-  if (status === "FAILED") {
-    return "Алдаа гарсан";
-  }
-
-  return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
-}
-
 function getStatusClass(status: string) {
-  if (status === "SAVED") {
+  if (status === submissionStatuses.saved) {
     return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
   }
 
-  if (status === "PROCESSING") {
+  if (status === submissionStatuses.processing) {
     return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
   }
 
-  if (status === "FAILED") {
+  if (status === submissionStatuses.failed) {
     return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
   }
 
