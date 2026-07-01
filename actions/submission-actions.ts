@@ -1,9 +1,11 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { gradeSubmission } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
+import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
 import { msSince, perfLog } from "@/lib/perf";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -97,6 +99,11 @@ export async function createSubmissionDraftAction(formData: FormData) {
   });
   console.info(`[submission-speed] gradingMs=${Date.now() - gradingStartedAt}`);
 
+  const imageUrl = await saveSubmissionImageFile({
+    file,
+    examId,
+    clientSubmissionKey: randomUUID(),
+  });
   const dbStartedAt = Date.now();
   const submission = await prisma.$transaction(
     async (tx) => {
@@ -122,7 +129,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
             id: existingSubmission.id,
           },
           data: {
-            imageUrl: file.name,
+            imageUrl,
             status: "DRAFT",
             score: grading.totalScore,
             total: grading.maxScore,
@@ -144,7 +151,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
         data: {
           examId,
           studentId,
-          imageUrl: file.name,
+          imageUrl,
           status: "DRAFT",
           score: grading.totalScore,
           total: grading.maxScore,

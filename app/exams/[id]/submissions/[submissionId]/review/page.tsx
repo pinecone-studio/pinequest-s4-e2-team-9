@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
+import SubmissionMaterialReviewLayout from "@/components/exams/submission-material-review-layout";
 import SubmissionReviewForm from "@/components/exams/submission-review-form";
 import PageHeader from "@/components/layout/page-header";
 import { gradeSubmission } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import { getSubmissionImagePreview } from "@/lib/submission-image-storage";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionReviewPage({
@@ -98,6 +100,10 @@ export default async function SubmissionReviewPage({
       })),
     };
   });
+  const studentMaterial = await getSubmissionImagePreview(
+    submission.imageUrl,
+    submission.examId
+  );
   perfLog("review-page", {
     authMs,
     submissionMs,
@@ -159,11 +165,18 @@ export default async function SubmissionReviewPage({
           </div>
         </div>
 
-        <SubmissionReviewForm
-          examId={submission.exam.id}
-          submissionId={submission.id}
-          questions={questions}
-        />
+        <SubmissionMaterialReviewLayout
+          materialUrl={studentMaterial.url}
+          materialName={studentMaterial.name}
+          materialMimeType={studentMaterial.mimeType}
+          materialMissingReason={studentMaterial.missingReason}
+        >
+          <SubmissionReviewForm
+            examId={submission.exam.id}
+            submissionId={submission.id}
+            questions={questions}
+          />
+        </SubmissionMaterialReviewLayout>
       </div>
     </div>
   );

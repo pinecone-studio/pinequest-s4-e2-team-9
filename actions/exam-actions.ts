@@ -7,6 +7,7 @@ import {
   type ExamMaterialQuestion,
 } from "@/lib/gemini-vision";
 import { generateCaptureToken } from "@/lib/capture-token";
+import { saveExamMaterialFile } from "@/lib/exam-material-storage";
 import { SUBJECT_OPTIONS } from "@/lib/subjects";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
@@ -75,6 +76,7 @@ export async function createExamAction(formData: FormData) {
 
     const questions = buildQuestions(analysis);
     createdQuestionsCount = questions.length;
+    const materialUrl = await saveExamMaterialFile(materialFile);
 
     const exam = await prisma.exam.create({
       data: {
@@ -84,8 +86,7 @@ export async function createExamAction(formData: FormData) {
         ownerUserId: user.id,
         captureToken: generateCaptureToken(),
         questionCount: questions.length,
-        // ponytail: demo stores the filename only; add object storage when teachers need to reopen files.
-        materialUrl: materialFile.name,
+        materialUrl,
         questions: { create: questions },
       },
     });
@@ -114,6 +115,47 @@ export async function createExamAction(formData: FormData) {
   revalidatePath("/dashboard");
   revalidatePath("/classrooms");
   revalidatePath(`/classrooms/${classroomId}`);
+  redirect(`/exams/${examId}/answer-key`);
+}
+
+export async function replaceExamMaterialAction(formData: FormData) {
+  const user = await requireCurrentUser();
+  const examId = String(formData.get("examId") || "").trim();
+  const material = formData.get("material");
+  const materialFile =
+    typeof File !== "undefined" && material instanceof File && material.size > 0
+      ? material
+      : null;
+
+  if (!examId) {
+    throw new Error("Шалгалтын ID дутуу байна.");
+  }
+
+  if (!materialFile) {
+    throw new Error("Эх материалын файл оруулна уу.");
+  }
+
+  if (!isSupportedMaterialFile(materialFile)) {
+    throw new Error("Зөвхөн зураг эсвэл PDF файл оруулна уу.");
+  }
+
+  const exam = await prisma.exam.findFirst({
+    where: { id: examId, ownerUserId: user.id },
+    select: { id: true },
+  });
+
+  if (!exam) {
+    throw new Error("Шалгалт олдсонгүй.");
+  }
+
+  const materialUrl = await saveExamMaterialFile(materialFile);
+
+  await prisma.exam.update({
+    where: { id: exam.id },
+    data: { materialUrl },
+  });
+
+  revalidatePath(`/exams/${examId}/answer-key`);
   redirect(`/exams/${examId}/answer-key`);
 }
 
@@ -169,4 +211,14 @@ function normalizeOptions(options: ExamMaterialQuestion["options"]) {
       isCorrect,
     };
   });
+}
+
+function isSupportedMaterialFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+
+  return (
+    file.type.startsWith("image/") ||
+    file.type === "application/pdf" ||
+    /\.(png|jpe?g|webp|gif|pdf)$/i.test(lowerName)
+  );
 }
