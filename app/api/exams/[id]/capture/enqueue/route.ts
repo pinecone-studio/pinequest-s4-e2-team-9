@@ -1,4 +1,6 @@
 import { revalidatePath } from "next/cache";
+import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
+import { msSince, perfLog } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
 
@@ -10,14 +12,17 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const totalStartedAt = Date.now();
   const { id: examId } = await params;
 
   try {
+    const formStartedAt = Date.now();
     const formData = await request.formData();
     const token = String(formData.get("token") || "").trim();
     const studentId = String(formData.get("studentId") || "").trim();
     const clientSubmissionKey = String(formData.get("clientSubmissionKey") || "").trim();
     const image = getFile(formData.get("image"));
+    const formMs = msSince(formStartedAt);
 
     if (!token || !studentId || !clientSubmissionKey || !image) {
       return jsonError("Илгээсэн мэдээлэл дутуу байна.", 400);
@@ -27,17 +32,23 @@ export async function POST(
       return jsonError("Зөвхөн PNG, JPG, JPEG, WEBP зураг илгээнэ.", 400);
     }
 
+    const examStartedAt = Date.now();
     const exam = await prisma.exam.findFirst({
       where: { id: examId, captureToken: token },
-      include: {
-        classroom: { include: { students: { select: { id: true } } } },
+      select: {
+        id: true,
+        classroom: { select: { students: { select: { id: true } } } },
         answerKeys: { orderBy: { question: "asc" } },
         questions: {
           orderBy: { number: "asc" },
-          include: { options: { orderBy: { createdAt: "asc" } } },
+          select: {
+            number: true,
+            options: { select: { isCorrect: true } },
+          },
         },
       },
     });
+    const examMs = msSince(examStartedAt);
 
     if (!exam) {
       return jsonError("Зураг авах холбоос хүчингүй байна.", 404);
@@ -54,11 +65,14 @@ export async function POST(
     console.info(
       `[capture-enqueue] start examId=${examId} studentId=${studentId} clientSubmissionKey=${clientSubmissionKey} imageBytes=${image.size}`
     );
+    const imageStartedAt = Date.now();
     const imageUrl = await saveSubmissionImageFile({
       file: image,
       examId,
       clientSubmissionKey,
     });
+    const imageMs = msSince(imageStartedAt);
+    const dbStartedAt = Date.now();
     const submission = await prisma.$transaction(
       async (tx) => {
         const existingSubmission = await tx.submission.findFirst({
@@ -94,8 +108,16 @@ export async function POST(
       },
       { timeout: 30000 }
     );
+    const dbMs = msSince(dbStartedAt);
 
     revalidatePath(`/exams/${examId}/submissions`);
+    perfLog("capture-enqueue", {
+      formMs,
+      examMs,
+      imageMs,
+      dbMs,
+      totalMs: msSince(totalStartedAt),
+    });
     console.info(
       `[capture-enqueue] success submissionId=${submission.id} clientSubmissionKey=${clientSubmissionKey}`
     );
@@ -116,20 +138,6 @@ function getFile(value: FormDataEntryValue | null) {
   return typeof File !== "undefined" && value instanceof File && value.size > 0
     ? value
     : null;
-}
-
-function isAnswerKeyReady(
-  questions: Array<{ number: number; options: Array<{ isCorrect: boolean }> }>,
-  answerKeys: Array<{ question: number; answer: string | null }>
-) {
-  return (
-    questions.length > 0 &&
-    questions.every(
-      (question) =>
-        question.options.some((option) => option.isCorrect) ||
-        answerKeys.some((answer) => answer.question === question.number && answer.answer)
-    )
-  );
 }
 
 function jsonError(error: string, status: number) {

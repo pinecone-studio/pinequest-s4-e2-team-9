@@ -1,35 +1,73 @@
 import { prisma } from "@/lib/prisma";
 import { labelsMatch } from "@/lib/grading";
+import { msSince, perfLog } from "@/lib/perf";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const totalStartedAt = Date.now();
   const { id } = await params;
+  const authStartedAt = Date.now();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const exportStartedAt = Date.now();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
-    include: {
-      classroom: true,
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      classroom: { select: { name: true } },
       answerKeys: { orderBy: { question: "asc" } },
       questions: {
         orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+        select: {
+          number: true,
+          points: true,
+          options: {
+            orderBy: { createdAt: "asc" },
+            select: { label: true, isCorrect: true },
+          },
+        },
       },
       submissions: {
         orderBy: { updatedAt: "desc" },
-        include: {
-          student: true,
-          answers: { orderBy: { question: "asc" } },
+        select: {
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          createdAt: true,
+          updatedAt: true,
+          student: { select: { name: true } },
+          answers: {
+            orderBy: { question: "asc" },
+            select: { question: true, selected: true, correct: true },
+          },
         },
       },
     },
   });
+  const exportMs = msSince(exportStartedAt);
 
   if (!exam) {
+    perfLog("results-export", {
+      authMs,
+      exportMs,
+      totalMs: msSince(totalStartedAt),
+    });
+
     return new Response("Шалгалт олдсонгүй.", { status: 404 });
   }
+  perfLog("results-export", {
+    authMs,
+    exportMs,
+    submissions: exam.submissions.length,
+    questions: exam.questions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   const totalPoints = exam.questions.reduce(
     (sum, question) => sum + safeNumber(question.points),

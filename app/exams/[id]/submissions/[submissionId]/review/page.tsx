@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import SubmissionReviewForm from "@/components/exams/submission-review-form";
 import PageHeader from "@/components/layout/page-header";
 import { gradeSubmission } from "@/lib/grading";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
@@ -12,8 +13,12 @@ export default async function SubmissionReviewPage({
 }: {
   params: Promise<{ id: string; submissionId: string }>;
 }) {
+  const totalStartedAt = perfNow();
   const { id, submissionId } = await params;
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const submissionStartedAt = perfNow();
   const submission = await prisma.submission.findFirst({
     where: { id: submissionId, examId: id, exam: { ownerUserId: user.id } },
     select: {
@@ -56,8 +61,14 @@ export default async function SubmissionReviewPage({
       },
     },
   });
+  const submissionMs = msSince(submissionStartedAt);
 
   if (!submission) {
+    perfLog("review-page", {
+      authMs,
+      submissionMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
 
@@ -86,6 +97,12 @@ export default async function SubmissionReviewPage({
         text: option.text,
       })),
     };
+  });
+  perfLog("review-page", {
+    authMs,
+    submissionMs,
+    questions: questions.length,
+    totalMs: msSince(totalStartedAt),
   });
 
   return (

@@ -28,6 +28,8 @@ model Student {
   submissions Submission[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+
+  @@index([classroomId])
 }
 
 model Exam {
@@ -47,6 +49,7 @@ model Exam {
   updatedAt     DateTime     @updatedAt
 
   @@index([ownerUserId])
+  @@index([classroomId])
 }
 
 model ExamQuestion {
@@ -72,6 +75,8 @@ model ExamOption {
   isCorrect  Boolean      @default(false)
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
+
+  @@index([questionId])
 }
 
 model AnswerKey {
@@ -101,6 +106,8 @@ model Submission {
 
   @@index([examId])
   @@index([studentId])
+  @@index([examId, studentId])
+  @@index([examId, status])
 }
 
 model SubmissionAnswer {
@@ -117,4 +124,5 @@ model SubmissionAnswer {
   updatedAt    DateTime   @updatedAt
 
   @@index([submissionId])
+  @@index([submissionId, question])
 }

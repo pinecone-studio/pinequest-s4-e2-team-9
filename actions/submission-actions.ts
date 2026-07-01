@@ -1,8 +1,10 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { gradeSubmission } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
+import { msSince, perfLog } from "@/lib/perf";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -178,7 +180,9 @@ export async function createSubmissionDraftAction(formData: FormData) {
 
 export async function saveReviewedSubmissionAction(formData: FormData) {
   const actionStartedAt = Date.now();
+  const authStartedAt = Date.now();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
   const examId = String(formData.get("examId") || "").trim();
   const submissionId = String(formData.get("submissionId") || "").trim();
 
@@ -212,7 +216,8 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
       },
     },
   });
-  console.info(`[review-save-speed] loadSubmissionMs=${Date.now() - loadStartedAt}`);
+  const loadMs = msSince(loadStartedAt);
+  console.info(`[review-save-speed] loadSubmissionMs=${loadMs}`);
 
   if (!submission) {
     redirect(`/exams/${examId}/submissions?error=submission`);
@@ -223,7 +228,8 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
     questionNumber: question.number,
     selectedLabel: String(formData.get(`answer-${question.number}`) || "").trim(),
   }));
-  console.info(`[review-save-speed] parseFormMs=${Date.now() - parseStartedAt}`);
+  const parseMs = msSince(parseStartedAt);
+  console.info(`[review-save-speed] parseFormMs=${parseMs}`);
 
   const gradingStartedAt = Date.now();
   const grading = gradeSubmission({
@@ -231,7 +237,8 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
     correctAnswers: submission.exam.answerKeys,
     extractedAnswers,
   });
-  console.info(`[review-save-speed] gradingMs=${Date.now() - gradingStartedAt}`);
+  const gradingMs = msSince(gradingStartedAt);
+  console.info(`[review-save-speed] gradingMs=${gradingMs}`);
 
   const transactionStartedAt = Date.now();
   await prisma.$transaction(
@@ -263,30 +270,26 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
     },
     { timeout: 30000 }
   );
-  console.info(`[review-save-speed] dbTransactionMs=${Date.now() - transactionStartedAt}`);
+  const transactionMs = msSince(transactionStartedAt);
+  console.info(`[review-save-speed] dbTransactionMs=${transactionMs}`);
 
   const revalidateStartedAt = Date.now();
   revalidatePath(`/exams/${examId}/submissions`);
   revalidatePath(`/exams/${examId}/submissions/${submissionId}/review`);
-  console.info(`[review-save-speed] revalidateMs=${Date.now() - revalidateStartedAt}`);
-  console.info(`[review-save-speed] totalMs=${Date.now() - actionStartedAt}`);
+  revalidatePath(`/exams/${examId}/results`);
+  const revalidateMs = msSince(revalidateStartedAt);
+  console.info(`[review-save-speed] revalidateMs=${revalidateMs}`);
+  console.info(`[review-save-speed] totalMs=${msSince(actionStartedAt)}`);
+  perfLog("review-save", {
+    authMs,
+    loadMs,
+    parseMs,
+    gradingMs,
+    transactionMs,
+    revalidateMs,
+    totalMs: msSince(actionStartedAt),
+  });
   redirect(`/exams/${examId}/submissions?saved=1`);
-}
-
-function isAnswerKeyReady(
-  questions: Array<{ number: number; options: Array<{ isCorrect: boolean }> }>,
-  answerKeys: Array<{ question: number; answer: string }>
-) {
-  const fallback = new Map(answerKeys.map((item) => [item.question, item.answer]));
-
-  return (
-    questions.length > 0 &&
-    questions.every(
-      (question) =>
-        question.options.some((option) => option.isCorrect) ||
-        Boolean(fallback.get(question.number))
-    )
-  );
 }
 
 function toSubmissionAnswerCreate(row: {

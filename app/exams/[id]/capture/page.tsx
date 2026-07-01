@@ -2,6 +2,8 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { ArrowLeft, Camera, Inbox, ListChecks } from "lucide-react";
 import PhoneCaptureQueue from "@/components/exams/phone-capture-queue";
+import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 
 export default async function CapturePage({
@@ -13,11 +15,15 @@ export default async function CapturePage({
     token?: string | string[];
   }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
+  const tokenStartedAt = perfNow();
   const { id } = await params;
   const query = await searchParams;
   const token = getQueryValue(query.token)?.trim() ?? "";
+  const tokenMs = msSince(tokenStartedAt);
+  const examStartedAt = perfNow();
   const exam = token
     ? await prisma.exam.findFirst({
         where: { id, captureToken: token },
@@ -25,41 +31,42 @@ export default async function CapturePage({
           id: true,
           title: true,
           classroomId: true,
+          answerKeys: { select: { question: true, answer: true } },
+          questions: {
+            select: {
+              number: true,
+              options: { select: { isCorrect: true } },
+            },
+          },
           classroom: {
             select: {
               name: true,
               students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
             },
           },
-          answerKeys: {
-            orderBy: { question: "asc" },
-            select: { question: true, answer: true },
-          },
-          questions: {
-            orderBy: { number: "asc" },
-            select: {
-              number: true,
-              options: {
-                orderBy: { createdAt: "asc" },
-                select: { isCorrect: true },
-              },
-            },
-          },
         },
       })
     : null;
+  const examMs = msSince(examStartedAt);
 
   if (!exam) {
+    perfLog("capture-page", {
+      tokenMs,
+      examMs,
+      totalMs: msSince(totalStartedAt),
+    });
+
     return <InvalidCaptureLink />;
   }
 
-  const isAnswerKeyReady =
-    exam.questions.length > 0 &&
-    exam.questions.every(
-      (question) =>
-        question.options.some((option) => option.isCorrect) ||
-        exam.answerKeys.some((answer) => answer.question === question.number)
-    );
+  const answerKeyReady = isAnswerKeyReady(exam.questions, exam.answerKeys);
+  perfLog("capture-page", {
+    tokenMs,
+    examMs,
+    students: exam.classroom.students.length,
+    answerKeyReady: Number(answerKeyReady),
+    totalMs: msSince(totalStartedAt),
+  });
 
   return (
     <div className="min-h-screen bg-stone-50/30 px-4 py-5 sm:px-6">
@@ -91,7 +98,7 @@ export default async function CapturePage({
             Сурагчаа сонгоод хариултын хуудсыг камераар авч илгээнэ.
           </p>
 
-          {!isAnswerKeyReady ? (
+          {!answerKeyReady ? (
             <div className="mt-4 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-800">
               <ListChecks className="mt-1 size-4 shrink-0" aria-hidden="true" />
               Эхлээд зөв хариултаа бүрэн баталгаажуулна уу.
@@ -119,7 +126,7 @@ export default async function CapturePage({
               examId={exam.id}
               captureToken={token}
               students={exam.classroom.students}
-              isAnswerKeyReady={isAnswerKeyReady}
+              isAnswerKeyReady={answerKeyReady}
             />
           )}
         </section>

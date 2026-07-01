@@ -7,6 +7,7 @@ import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-
 import SubmissionUploadForm from "@/components/exams/submission-upload-form";
 import PageHeader from "@/components/layout/page-header";
 import { generateCaptureToken } from "@/lib/capture-token";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
@@ -20,13 +21,17 @@ export default async function SubmissionsPage({
     error?: string | string[];
   }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
   const { id } = await params;
   const query = await searchParams;
   const saved = getQueryValue(query.saved) === "1";
   const error = getQueryValue(query.error);
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const examStartedAt = perfNow();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
     select: {
@@ -35,26 +40,16 @@ export default async function SubmissionsPage({
       subject: true,
       classroomId: true,
       captureToken: true,
+      _count: { select: { answerKeys: true, questions: true } },
       classroom: {
         select: {
           name: true,
           students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
         },
       },
-      answerKeys: {
-        orderBy: { question: "asc" },
-        select: { question: true, answer: true },
-      },
       questions: {
         orderBy: { number: "asc" },
-        select: {
-          number: true,
-          points: true,
-          options: {
-            orderBy: { createdAt: "asc" },
-            select: { isCorrect: true },
-          },
-        },
+        select: { number: true, points: true },
       },
       submissions: {
         orderBy: { createdAt: "desc" },
@@ -65,13 +60,19 @@ export default async function SubmissionsPage({
           total: true,
           percentage: true,
           createdAt: true,
-          student: { select: { name: true } },
+          student: { select: { id: true, name: true } },
         },
       },
     },
   });
+  const examMs = msSince(examStartedAt);
 
   if (!exam) {
+    perfLog("submissions-page", {
+      authMs,
+      examMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
 
@@ -85,13 +86,17 @@ export default async function SubmissionsPage({
   }
 
   const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
-  const isAnswerKeyReady = exam.questions.length > 0 && exam.questions.every(
-    (question) =>
-      question.options.some((option) => option.isCorrect) ||
-      exam.answerKeys.some((answer) => answer.question === question.number)
-  );
+  const isAnswerKeyReady =
+    exam._count.questions > 0 && exam._count.answerKeys >= exam._count.questions;
   const savedCount = exam.submissions.filter((submission) => submission.status === "SAVED").length;
   const captureLink = getCaptureLink(exam.id, captureToken);
+  perfLog("submissions-page", {
+    authMs,
+    examMs,
+    students: exam.classroom.students.length,
+    submissions: exam.submissions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">

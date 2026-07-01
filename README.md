@@ -16,6 +16,16 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Phone tunnel testing
+
+For localtunnel phone testing, set the public app URL before starting dev:
+
+```bash
+NEXT_PUBLIC_APP_URL=https://your-tunnel.loca.lt bun run dev
+```
+
+`next.config.ts` reads that host for Next.js dev origin and Server Action origin allow-lists.
+
 ## Supabase Realtime
 
 Exam auto-refresh uses Broadcast first, so capture success can refresh the teacher page even if Postgres Changes is not configured. Postgres Changes is still useful as a secondary signal.

@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { gradeSubmission } from "@/lib/grading";
+import { msSince, perfLog } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { readSubmissionImageFile } from "@/lib/submission-image-storage";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
@@ -10,6 +11,7 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ submissionId: string }> }
 ) {
+  const totalStartedAt = Date.now();
   const { submissionId } = await params;
   let examId: string | null = null;
 
@@ -20,20 +22,33 @@ export async function POST(
       return jsonError("Зураг авах token дутуу байна.", 401);
     }
 
+    const loadStartedAt = Date.now();
     const submission = await prisma.submission.findFirst({
       where: { id: submissionId, exam: { captureToken: token } },
-      include: {
+      select: {
+        id: true,
+        examId: true,
+        imageUrl: true,
+        status: true,
         exam: {
-          include: {
+          select: {
             answerKeys: { orderBy: { question: "asc" } },
             questions: {
               orderBy: { number: "asc" },
-              include: { options: { orderBy: { createdAt: "asc" } } },
+              select: {
+                number: true,
+                points: true,
+                options: {
+                  orderBy: { createdAt: "asc" },
+                  select: { label: true, isCorrect: true },
+                },
+              },
             },
           },
         },
       },
     });
+    const loadMs = msSince(loadStartedAt);
 
     if (!submission) {
       return jsonError("Илгээсэн хариулт олдсонгүй.", 404);
@@ -42,6 +57,12 @@ export async function POST(
     examId = submission.examId;
 
     if (submission.status !== "PROCESSING" && submission.status !== "FAILED") {
+      perfLog("submission-process", {
+        loadMs,
+        skippedStatus: submission.status,
+        totalMs: msSince(totalStartedAt),
+      });
+
       return Response.json({ ok: true, status: submission.status });
     }
 
@@ -52,7 +73,9 @@ export async function POST(
         question.options.map((option) => option.label),
       ])
     );
+    const fileStartedAt = Date.now();
     const imageFile = await readSubmissionImageFile(submission.imageUrl);
+    const fileMs = msSince(fileStartedAt);
 
     console.info(`[submission-process] gemini start submissionId=${submissionId}`);
     const geminiStartedAt = Date.now();
@@ -61,20 +84,22 @@ export async function POST(
       questionNumbers,
       optionLabelsByQuestion
     );
-    console.info(
-      `[submission-process] geminiMs=${Date.now() - geminiStartedAt} submissionId=${submissionId}`
-    );
+    const geminiMs = msSince(geminiStartedAt);
+    console.info(`[submission-process] geminiMs=${geminiMs} submissionId=${submissionId}`);
 
     if (analysis.answers.length === 0) {
       throw new Error(analysis.notes || "AI did not return answers.");
     }
 
+    const gradeStartedAt = Date.now();
     const grading = gradeSubmission({
       questions: submission.exam.questions,
       correctAnswers: submission.exam.answerKeys,
       extractedAnswers: analysis.answers,
     });
+    const gradeMs = msSince(gradeStartedAt);
 
+    const dbStartedAt = Date.now();
     await prisma.$transaction(
       async (tx) => {
         await tx.submissionAnswer.deleteMany({ where: { submissionId } });
@@ -101,9 +126,18 @@ export async function POST(
       },
       { timeout: 30000 }
     );
+    const dbMs = msSince(dbStartedAt);
 
     revalidatePath(`/exams/${submission.examId}/submissions`);
     revalidatePath(`/exams/${submission.examId}/submissions/${submissionId}/review`);
+    perfLog("submission-process", {
+      loadMs,
+      fileMs,
+      geminiMs,
+      gradeMs,
+      dbMs,
+      totalMs: msSince(totalStartedAt),
+    });
     console.info(`[submission-process] completed submissionId=${submissionId}`);
 
     return Response.json({ ok: true, status: "DRAFT" });

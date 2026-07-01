@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { ArrowLeft, Download, Inbox, ListChecks, UploadCloud } from "lucide-react";
 import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import PageHeader from "@/components/layout/page-header";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
@@ -12,39 +13,61 @@ export default async function ResultsPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
   const { id } = await params;
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const resultsStartedAt = perfNow();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
-    include: {
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      questionCount: true,
       classroom: {
-        include: {
-          students: {
-            orderBy: { createdAt: "asc" },
-            select: { id: true, name: true },
-          },
-        },
+        select: { name: true, _count: { select: { students: true } } },
       },
-      answerKeys: { orderBy: { question: "asc" } },
-      questions: {
-        orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
-      },
+      questions: { orderBy: { number: "asc" }, select: { id: true, number: true, points: true } },
       submissions: {
         orderBy: { updatedAt: "desc" },
-        include: {
+        select: {
+          id: true,
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          createdAt: true,
+          updatedAt: true,
           student: { select: { name: true } },
-          answers: { orderBy: { question: "asc" } },
+          answers: {
+            orderBy: { question: "asc" },
+            select: { question: true, selected: true, isCorrect: true },
+          },
         },
       },
     },
   });
+  const resultsMs = msSince(resultsStartedAt);
 
   if (!exam) {
+    perfLog("results-page", {
+      authMs,
+      resultsMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
+  perfLog("results-page", {
+    authMs,
+    resultsMs,
+    submissions: exam.submissions.length,
+    questions: exam.questions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   const questionCount = exam.questions.length || exam.questionCount;
   const totalPoints = exam.questions.reduce(
@@ -88,7 +111,7 @@ export default async function ResultsPage({
   );
 
   const summaryCards = [
-    { label: "Сурагчийн тоо", value: String(exam.classroom.students.length) },
+    { label: "Сурагчийн тоо", value: String(exam.classroom._count.students) },
     { label: "Дүн орсон", value: String(savedSubmissions.length) },
     {
       label: "Дундаж оноо",

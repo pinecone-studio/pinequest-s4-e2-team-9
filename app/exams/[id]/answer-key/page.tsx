@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { AlertCircle, ArrowLeft, BarChart3, UploadCloud } from "lucide-react";
 import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
 import PageHeader from "@/components/layout/page-header";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
@@ -11,25 +12,54 @@ export default async function AnswerKeyPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const totalStartedAt = perfNow();
   const { id } = await params;
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const examStartedAt = perfNow();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
-    include: {
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      classroomId: true,
+      materialUrl: true,
+      questionCount: true,
       classroom: { select: { name: true } },
       answerKeys: { orderBy: { question: "asc" } },
       questions: {
         orderBy: { number: "asc" },
-        include: {
-          options: { orderBy: { createdAt: "asc" } },
+        select: {
+          id: true,
+          number: true,
+          text: true,
+          points: true,
+          options: {
+            orderBy: { createdAt: "asc" },
+            select: { id: true, label: true, text: true, isCorrect: true },
+          },
         },
       },
     },
   });
+  const examMs = msSince(examStartedAt);
 
   if (!exam) {
+    perfLog("answer-key-page", {
+      authMs,
+      examMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
+  perfLog("answer-key-page", {
+    authMs,
+    examMs,
+    questions: exam.questions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   const existingAnswers = new Map(
     exam.answerKeys.map((item) => [item.question, item.answer])

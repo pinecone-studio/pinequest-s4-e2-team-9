@@ -4,6 +4,7 @@ import { ArrowLeft, FilePlus2, Inbox } from 'lucide-react';
 import PageHeader from '@/components/layout/page-header';
 import AddStudentForm from '@/components/ui/AddStudentForm';
 import StudentTable from '@/components/ui/StudentTable';
+import { msSince, perfLog, perfNow } from '@/lib/perf';
 import { prisma } from '@/lib/prisma';
 import { requireCurrentUser } from '@/lib/supabase/server';
 
@@ -12,11 +13,17 @@ export default async function ClassroomDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const totalStartedAt = perfNow();
   const { id } = await params;
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const classroomStartedAt = perfNow();
   const classroom = await prisma.classroom.findFirst({
     where: { id, ownerUserId: user.id },
-    include: {
+    select: {
+      id: true,
+      name: true,
       students: {
         orderBy: { createdAt: 'asc' },
         select: { id: true, name: true },
@@ -34,10 +41,23 @@ export default async function ClassroomDetailPage({
       },
     },
   });
+  const classroomMs = msSince(classroomStartedAt);
 
   if (!classroom) {
+    perfLog('classroom-detail', {
+      authMs,
+      classroomMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
+  perfLog('classroom-detail', {
+    authMs,
+    classroomMs,
+    students: classroom.students.length,
+    exams: classroom.exams.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">

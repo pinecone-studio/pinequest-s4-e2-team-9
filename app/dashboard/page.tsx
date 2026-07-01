@@ -12,45 +12,56 @@ import {
   UploadCloud,
 } from "lucide-react";
 import PageHeader from "@/components/layout/page-header";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function DashboardPage() {
+  const totalStartedAt = perfNow();
   await connection();
 
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
-  const [totalClasses, totalExams, savedSubmissions, recentExams] =
+  const authMs = msSince(authStartedAt);
+  const dataStartedAt = perfNow();
+  const [totalClasses, totalExams, savedSubmissionStats, recentExams] =
     await Promise.all([
       prisma.classroom.count({ where: { ownerUserId: user.id } }),
       prisma.exam.count({ where: { ownerUserId: user.id } }),
-      prisma.submission.findMany({
+      prisma.submission.aggregate({
         where: { status: "SAVED", exam: { ownerUserId: user.id } },
-        select: { percentage: true },
+        _avg: { percentage: true },
+        _count: { id: true },
       }),
       prisma.exam.findMany({
         where: { ownerUserId: user.id },
         orderBy: { createdAt: "desc" },
         take: 5,
-        include: {
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          questionCount: true,
           classroom: { select: { name: true } },
           _count: { select: { submissions: true } },
         },
       }),
     ]);
-  const averagePercentage =
-    savedSubmissions.length === 0
-      ? null
-      : savedSubmissions.reduce(
-          (sum, submission) => sum + safeNumber(submission.percentage),
-          0
-        ) / savedSubmissions.length;
+  const dataMs = msSince(dataStartedAt);
+  const savedSubmissionsCount = savedSubmissionStats._count.id;
+  const averagePercentage = savedSubmissionStats._avg.percentage;
+  perfLog("dashboard", {
+    authMs,
+    dataMs,
+    totalMs: msSince(totalStartedAt),
+  });
   const cards = [
     { label: "Нийт анги", value: String(totalClasses), icon: School },
     { label: "Нийт шалгалт", value: String(totalExams), icon: FileText },
-    { label: "Дүн орсон хуудас", value: String(savedSubmissions.length), icon: LayoutDashboard },
+    { label: "Дүн орсон хуудас", value: String(savedSubmissionsCount), icon: LayoutDashboard },
     {
       label: "Дундаж амжилт",
-      value: averagePercentage === null ? "-" : `${Math.round(averagePercentage)}%`,
+      value: averagePercentage === null ? "-" : `${Math.round(safeNumber(averagePercentage))}%`,
       icon: TrendingUp,
     },
   ];
