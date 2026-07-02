@@ -39,6 +39,7 @@ type EnqueueResponse = {
   submissionId?: string;
   status?: string;
   error?: string;
+  message?: string;
 };
 
 const uploadConcurrency = 2;
@@ -105,6 +106,7 @@ export default function PhoneCaptureQueue({
             status: "done",
             error: "",
           });
+          setMessage(data?.message || "");
         })
         .catch((error: unknown) => {
           patchItem(item.localId, {
@@ -280,8 +282,25 @@ export default function PhoneCaptureQueue({
   }
 
   function retryItem(localId: string) {
+    const item = items.find((queueItem) => queueItem.localId === localId);
+
+    if (!item) {
+      return;
+    }
+
     startedLocalIdsRef.current.delete(localId);
+
+    if (item.submissionId) {
+      patchItem(localId, {
+        status: "processing",
+        error: "",
+      });
+      triggerProcessing(item, item.submissionId);
+      return;
+    }
+
     patchItem(localId, {
+      clientSubmissionKey: randomId(),
       status: "queued",
       error: "",
       startedAt: undefined,

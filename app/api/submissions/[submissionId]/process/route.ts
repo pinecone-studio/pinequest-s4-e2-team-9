@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { gradeSubmission, normalizeAnswerLabel } from "@/lib/grading";
@@ -15,7 +16,10 @@ export async function POST(
 ) {
   const totalStartedAt = Date.now();
   const { submissionId } = await params;
+  const processRunId = randomUUID();
   let examId: string | null = null;
+  let startedImageUrl: string | null = null;
+  let startedUpdatedAt: Date | null = null;
 
   try {
     const token = await getToken(request);
@@ -30,8 +34,10 @@ export async function POST(
       select: {
         id: true,
         examId: true,
+        studentId: true,
         imageUrl: true,
         status: true,
+        updatedAt: true,
         exam: {
           select: {
             answerKeys: {
@@ -60,6 +66,9 @@ export async function POST(
     }
 
     examId = submission.examId;
+    console.info(
+      `[submission-process] start processRunId=${processRunId} submissionId=${submissionId} studentId=${submission.studentId} statusBefore=${submission.status} imagePath=${submission.imageUrl ?? "none"} clientSubmissionKey=${getClientSubmissionKey(submission.imageUrl)}`
+    );
 
     if (submission.status !== "PROCESSING" && submission.status !== "FAILED") {
       perfLog("submission-process", {
@@ -71,6 +80,39 @@ export async function POST(
       return Response.json({ ok: true, status: submission.status });
     }
 
+    const processStartedAt = new Date();
+    const started = await prisma.submission.updateMany({
+      where: {
+        id: submissionId,
+        imageUrl: submission.imageUrl,
+        updatedAt: submission.updatedAt,
+        status: { in: ["PROCESSING", "FAILED"] },
+      },
+      data: {
+        status: "PROCESSING",
+        updatedAt: processStartedAt,
+      },
+    });
+
+    if (started.count === 0) {
+      const current = await prisma.submission.findUnique({
+        where: { id: submissionId },
+        select: { status: true },
+      });
+      console.info(
+        `[submission-process] skipped stale-start processRunId=${processRunId} submissionId=${submissionId} finalStatus=${current?.status ?? "missing"}`
+      );
+
+      return Response.json({
+        ok: true,
+        skipped: true,
+        status: current?.status ?? "UNKNOWN",
+      });
+    }
+
+    startedImageUrl = submission.imageUrl;
+    startedUpdatedAt = processStartedAt;
+
     const questionNumbers = submission.exam.questions.map((question) => question.number);
     const optionLabelsByQuestion = Object.fromEntries(
       submission.exam.questions.map((question) => [
@@ -79,49 +121,93 @@ export async function POST(
       ])
     );
 
-    await prisma.submission.update({
-      where: { id: submissionId },
-      data: { status: "PROCESSING" },
-    });
     revalidatePath(`/exams/${submission.examId}/submissions`);
     revalidatePath(`/exams/${submission.examId}/results`);
 
     const fileStartedAt = Date.now();
     const imageFile = await readSubmissionImageFile(submission.imageUrl);
     const fileMs = msSince(fileStartedAt);
-
-    console.info(`[submission-process] gemini start submissionId=${submissionId}`);
-    const geminiStartedAt = Date.now();
-    const analysis = await analyzeStudentAnswerSheet(
-      imageFile,
-      submission.exam.questions,
-      submission.exam.answerKeys
+    console.info(
+      `[submission-process] image processRunId=${processRunId} submissionId=${submissionId} imagePath=${submission.imageUrl ?? "none"} contentType=${imageFile.type || "unknown"} byteSize=${imageFile.size}`
     );
-    const geminiMs = msSince(geminiStartedAt);
-    console.info(`[submission-process] geminiMs=${geminiMs} submissionId=${submissionId}`);
 
-    if (analysis.answers.length === 0) {
-      throw new Error(analysis.notes || "AI did not return answers.");
+    let analysis: Awaited<ReturnType<typeof analyzeStudentAnswerSheet>> | null = null;
+    let geminiMs = 0;
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      console.info(
+        `[submission-process] gemini attempt start processRunId=${processRunId} submissionId=${submissionId} attempt=${attempt}`
+      );
+      const geminiStartedAt = Date.now();
+      analysis = await analyzeStudentAnswerSheet(
+        imageFile,
+        submission.exam.questions,
+        submission.exam.answerKeys
+      );
+      const attemptMs = msSince(geminiStartedAt);
+      geminiMs += attemptMs;
+      console.info(
+        `[submission-process] gemini attempt done processRunId=${processRunId} submissionId=${submissionId} attempt=${attempt} geminiMs=${attemptMs} extractedAnswerCount=${analysis.answers.length}`
+      );
+
+      if (analysis.answers.length > 0) {
+        break;
+      }
     }
+
+    const finalAnalysis = analysis ?? {
+      confidence: "low" as const,
+      notes: "AI бүрэн уншиж чадсангүй. Багш гараар засна.",
+      answers: [],
+    };
 
     const gradeStartedAt = Date.now();
     const grading = gradeSubmission({
       questions: submission.exam.questions,
       correctAnswers: submission.exam.answerKeys,
-      extractedAnswers: analysis.answers,
+      extractedAnswers: finalAnalysis.answers,
     });
     const statusDecision = decideProcessedSubmissionStatus({
-      analysis,
+      analysis: finalAnalysis,
       questionNumbers,
       optionLabelsByQuestion,
       answerKeyReady: isAnswerKeyReady(submission.exam.questions, submission.exam.answerKeys),
     });
     const finalStatus = grading.needsReview ? submissionStatuses.draft : statusDecision.status;
+    const message =
+      finalAnalysis.answers.length === 0
+        ? "AI бүрэн уншиж чадсангүй. Багш гараар засна."
+        : undefined;
     const gradeMs = msSince(gradeStartedAt);
+    const guardImageUrl = startedImageUrl;
+    const guardUpdatedAt = startedUpdatedAt;
+
+    if (!guardUpdatedAt) {
+      throw new Error("Process run guard was not initialized.");
+    }
 
     const dbStartedAt = Date.now();
-    await prisma.$transaction(
+    const saved = await prisma.$transaction(
       async (tx) => {
+        const current = await tx.submission.updateMany({
+          where: {
+            id: submissionId,
+            imageUrl: guardImageUrl,
+            updatedAt: guardUpdatedAt,
+            status: "PROCESSING",
+          },
+          data: {
+            status: finalStatus,
+            score: grading.totalScore,
+            total: grading.maxScore,
+            percentage: grading.percentage,
+          },
+        });
+
+        if (current.count === 0) {
+          return false;
+        }
+
         await tx.submissionAnswer.deleteMany({ where: { submissionId } });
         await tx.submissionAnswer.createMany({
           data: grading.rows.map((row) => ({
@@ -134,19 +220,28 @@ export async function POST(
             maxPoints: row.maxPoints,
           })),
         });
-        await tx.submission.update({
-          where: { id: submissionId },
-          data: {
-            status: finalStatus,
-            score: grading.totalScore,
-            total: grading.maxScore,
-            percentage: grading.percentage,
-          },
-        });
+
+        return true;
       },
       { timeout: 30000 }
     );
     const dbMs = msSince(dbStartedAt);
+
+    if (!saved) {
+      const current = await prisma.submission.findUnique({
+        where: { id: submissionId },
+        select: { status: true },
+      });
+      console.info(
+        `[submission-process] skipped stale-save processRunId=${processRunId} submissionId=${submissionId} finalStatus=${current?.status ?? "missing"}`
+      );
+
+      return Response.json({
+        ok: true,
+        skipped: true,
+        status: current?.status ?? "UNKNOWN",
+      });
+    }
 
     revalidatePath(`/exams/${submission.examId}/submissions`);
     revalidatePath(`/exams/${submission.examId}/submissions/${submissionId}/review`);
@@ -160,20 +255,30 @@ export async function POST(
       totalMs: msSince(totalStartedAt),
     });
     console.info(
-      `[submission-process] completed submissionId=${submissionId} status=${finalStatus} reviewReason=${statusDecision.reviewReason || (grading.needsReview ? "grading_needs_review" : "none")}`
+      `[submission-process] completed processRunId=${processRunId} submissionId=${submissionId} extractedAnswerCount=${finalAnalysis.answers.length} finalStatus=${finalStatus} reviewReason=${statusDecision.reviewReason || (grading.needsReview ? "grading_needs_review" : "none")}`
     );
 
-    return Response.json({ ok: true, status: finalStatus });
+    return Response.json({ ok: true, status: finalStatus, message });
   } catch (error) {
     console.error(
-      `[submission-process] failed submissionId=${submissionId} error=${getErrorMessage(error)}`
+      `[submission-process] failed processRunId=${processRunId} submissionId=${submissionId} error=${getErrorMessage(error)}`
     );
 
-    if (examId) {
-      await prisma.submission.update({
-        where: { id: submissionId },
+    if (examId && startedUpdatedAt) {
+      const guardImageUrl = startedImageUrl;
+      const guardUpdatedAt = startedUpdatedAt;
+      const failed = await prisma.submission.updateMany({
+        where: {
+          id: submissionId,
+          imageUrl: guardImageUrl,
+          updatedAt: guardUpdatedAt,
+          status: "PROCESSING",
+        },
         data: { status: "FAILED" },
       });
+      console.info(
+        `[submission-process] failure status update processRunId=${processRunId} submissionId=${submissionId} updated=${failed.count}`
+      );
       revalidatePath(`/exams/${examId}/submissions`);
       revalidatePath(`/exams/${examId}/results`);
     }
@@ -202,6 +307,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getClientSubmissionKey(imageUrl: string | null) {
+  if (!imageUrl) {
+    return "none";
+  }
+
+  try {
+    const pathname = /^https?:\/\//i.test(imageUrl) ? new URL(imageUrl).pathname : imageUrl;
+    const fileName = decodeURIComponent(pathname.split("/").pop() || "");
+
+    return fileName.replace(/\.[^.]+$/, "") || "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function jsonError(error: string, status: number) {

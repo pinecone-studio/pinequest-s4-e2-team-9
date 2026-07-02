@@ -1,5 +1,10 @@
 import "server-only";
-import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
+import {
+  GoogleGenerativeAI,
+  SchemaType,
+  type Part,
+  type ResponseSchema,
+} from "@google/generative-ai";
 import {
   findOptionLabel,
   formatMatchingPairs,
@@ -39,6 +44,37 @@ const emptyAnalysis: StudentAnswerSheetAnalysis = {
 };
 
 const imageTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const studentAnswerResponseSchema: ResponseSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    confidence: {
+      type: SchemaType.STRING,
+      format: "enum",
+      enum: ["low", "medium", "high"],
+    },
+    notes: { type: SchemaType.STRING },
+    answers: {
+      type: SchemaType.ARRAY,
+      items: {
+        type: SchemaType.OBJECT,
+        properties: {
+          questionNumber: { type: SchemaType.INTEGER },
+          selectedLabel: { type: SchemaType.STRING, nullable: true },
+          rawAnswer: { type: SchemaType.STRING, nullable: true },
+          normalizedAnswer: { type: SchemaType.STRING, nullable: true },
+          confidence: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: ["low", "medium", "high"],
+            nullable: true,
+          },
+        },
+        required: ["questionNumber"],
+      },
+    },
+  },
+  required: ["confidence", "notes", "answers"],
+};
 
 export async function analyzeStudentAnswerSheet(
   file: File,
@@ -108,6 +144,7 @@ Expected JSON: {"confidence":"medium","notes":"string","answers":[{"questionNumb
       model: modelName,
       generationConfig: {
         responseMimeType: "application/json",
+        responseSchema: studentAnswerResponseSchema,
         temperature: 0,
         maxOutputTokens: 4096,
       },
@@ -120,10 +157,18 @@ Expected JSON: {"confidence":"medium","notes":"string","answers":[{"questionNumb
     const raw = result.response.text();
 
     console.info("[student-answer-vision] raw response first 500 chars", raw.slice(0, 500));
+    console.info("[student-answer-vision] raw response length", raw.length);
 
     const parsed = parseAnalysis(raw, questionSpecs);
 
-    console.info("[student-answer-vision] parsed answers length", parsed.answers.length);
+    console.info(
+      "[student-answer-vision] parse result",
+      JSON.stringify({
+        root: raw.trim().startsWith("[") ? "array" : "object",
+        answers: parsed.answers.length,
+        confidence: parsed.confidence,
+      })
+    );
 
     return parsed;
   } catch (error) {
@@ -148,7 +193,7 @@ function parseAnalysis(
   }
 
   if (!isRecord(parsed)) {
-    return emptyAnalysis;
+    throw new Error("Gemini response JSON root was not an object or array");
   }
 
   return {
@@ -180,7 +225,7 @@ function cleanJson(raw: string) {
   const end = useArray ? trimmed.lastIndexOf("]") : trimmed.lastIndexOf("}");
 
   if (start === -1 || end === -1 || end <= start) {
-    return "[]";
+    throw new Error("Gemini response did not contain complete JSON object or array");
   }
 
   return trimmed.slice(start, end + 1);
