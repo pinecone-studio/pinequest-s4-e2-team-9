@@ -157,18 +157,19 @@ export default async function NewExamPage({
           ) : null}
 
           <div>
-            <label htmlFor="material" className="mb-1.5 block text-sm font-semibold text-stone-700">
-              Шалгалтын материал
+            <label htmlFor="materialFiles" className="mb-1.5 block text-sm font-semibold text-stone-700">
+              Шалгалтын материалын хуудсууд
             </label>
             <input
-              id="material"
-              name="material"
+              id="materialFiles"
+              name="materialFiles"
               type="file"
-              accept="image/*,.pdf"
+              multiple
+              accept="image/jpeg,image/png,image/webp,application/pdf"
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
             />
             <p className="mt-2 text-xs text-stone-500">
-              Шалгалтын материалаа оруулна уу. AI асуулт, сонголт болон зөв хариуг уншиж дараагийн алхамд багш баталгаажуулна.
+              Нэг эсвэл олон зураг/PDF сонгож болно. Олон файл сонговол нэг шалгалтын материал болж боловсруулагдана.
             </p>
           </div>
 

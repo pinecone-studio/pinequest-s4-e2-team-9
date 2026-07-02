@@ -2,7 +2,7 @@ export type GradeQuestion = {
   number: number;
   points?: number | null;
   sourcePageNumber?: number | null;
-  options?: Array<{ label: string; isCorrect?: boolean | null }>;
+  options?: Array<{ label?: string | null; isCorrect?: boolean | null }>;
 };
 
 export type GradeCorrectAnswer = {
@@ -39,11 +39,14 @@ export function gradeSubmission({
   questions,
   correctAnswers = [],
   extractedAnswers,
+  questionCount,
 }: {
   questions: GradeQuestion[];
   correctAnswers?: GradeCorrectAnswer[];
   extractedAnswers: GradeExtractedAnswer[];
+  questionCount?: number | null;
 }) {
+  const gradeQuestions = expandQuestionsToCount(questions, questionCount, correctAnswers);
   const fallbackCorrect = new Map(
     correctAnswers.map((item) => [
       item.questionNumber ?? item.question ?? 0,
@@ -60,8 +63,11 @@ export function gradeSubmission({
     ])
   );
 
-  const rows = questions.map((question) => {
-    const optionLabels = question.options?.map((option) => option.label) ?? [];
+  const rows = gradeQuestions.map((question) => {
+    const optionLabels =
+      question.options
+        ?.map((option) => option.label)
+        .filter((label): label is string => Boolean(label)) ?? [];
     const correctLabel = findOptionLabel(
       question.options?.find((option) => option.isCorrect)?.label ??
         fallbackCorrect.get(question.number) ??
@@ -101,6 +107,33 @@ export function gradeSubmission({
     maxScore,
     percentage: maxScore === 0 ? 0 : Math.round((totalScore / maxScore) * 10000) / 100,
   };
+}
+
+export function expandQuestionsToCount(
+  questions: GradeQuestion[],
+  questionCount?: number | null,
+  correctAnswers: GradeCorrectAnswer[] = []
+) {
+  const maxQuestionNumber = Math.max(
+    toPositiveInteger(questionCount),
+    ...questions.map((question) => toPositiveInteger(question.number)),
+    ...correctAnswers.map((answer) =>
+      toPositiveInteger(answer.questionNumber ?? answer.question)
+    )
+  );
+  const byNumber = new Map<number, GradeQuestion>();
+
+  for (const question of questions) {
+    if (Number.isInteger(question.number) && question.number > 0) {
+      byNumber.set(question.number, question);
+    }
+  }
+
+  return Array.from({ length: maxQuestionNumber }, (_, index) => {
+    const number = index + 1;
+
+    return byNumber.get(number) ?? { number, points: 1, sourcePageNumber: null, options: [] };
+  });
 }
 
 export function labelsMatch(left: string | null | undefined, right: string | null | undefined) {
@@ -149,4 +182,8 @@ function normalizeComparableLabel(label: string) {
   return label
     .toUpperCase()
     .replace(/[AАBВCСEЕHНPРXХ]/g, (character) => lookalikes[character] ?? character);
+}
+
+function toPositiveInteger(value: number | null | undefined) {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : 0;
 }

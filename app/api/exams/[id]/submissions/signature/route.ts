@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import { expandQuestionsToCount } from "@/lib/grading";
 import { prisma } from "@/lib/prisma";
 import {
   buildAnswerKeySignatureSeed,
@@ -19,6 +20,7 @@ export async function GET(
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
     select: {
+      questionCount: true,
       submissions: {
         select: {
           id: true,
@@ -45,13 +47,18 @@ export async function GET(
     return Response.json({ error: "Шалгалт олдсонгүй." }, { status: 404 });
   }
 
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
   const seed = buildAnswerKeySignatureSeed({
-    questions: exam.questions,
+    questions,
     answerKeys: exam.answerKeys,
   });
   const summary = summarizeSubmissions(exam.submissions, seed);
-  const totalPossibleScore = exam.questions.reduce(
-    (sum, question) => sum + question.points,
+  const totalPossibleScore = questions.reduce(
+    (sum, question) => sum + (question.points ?? 1),
     0
   );
 

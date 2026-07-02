@@ -1,6 +1,6 @@
 import "server-only";
 
-import { gradeSubmission } from "@/lib/grading";
+import { expandQuestionsToCount, gradeSubmission } from "@/lib/grading";
 import { prisma } from "@/lib/prisma";
 import { submissionStatuses } from "@/lib/submission-state";
 
@@ -8,6 +8,7 @@ export async function regradeExamSubmissions(examId: string) {
   const exam = await prisma.exam.findUnique({
     where: { id: examId },
     select: {
+      questionCount: true,
       answerKeys: {
         orderBy: { question: "asc" },
         select: { question: true, answer: true },
@@ -42,19 +43,30 @@ export async function regradeExamSubmissions(examId: string) {
     },
   });
 
-  if (!exam || exam.questions.length === 0 || exam.submissions.length === 0) {
+  if (!exam || exam.submissions.length === 0) {
+    return { regraded: 0 };
+  }
+
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+
+  if (questions.length === 0) {
     return { regraded: 0 };
   }
 
   const updates = exam.submissions.map((submission) => ({
     submissionId: submission.id,
     grading: gradeSubmission({
-      questions: exam.questions,
+      questions,
       correctAnswers: exam.answerKeys,
       extractedAnswers: submission.answers.map((answer) => ({
         questionNumber: answer.question,
         selectedLabel: answer.selected,
       })),
+      questionCount: exam.questionCount,
     }),
   }));
 

@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { ArrowLeft, Camera, Inbox, ListChecks } from "lucide-react";
 import PhoneCaptureQueue from "@/components/exams/phone-capture-queue";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
+import { expandQuestionsToCount } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 
@@ -31,6 +32,7 @@ export default async function CapturePage({
           id: true,
           title: true,
           classroomId: true,
+          questionCount: true,
           answerKeys: { select: { question: true, answer: true } },
           questions: {
             select: {
@@ -59,7 +61,12 @@ export default async function CapturePage({
     return <InvalidCaptureLink />;
   }
 
-  const answerKeyReady = isAnswerKeyReady(exam.questions, exam.answerKeys);
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const answerKeyReady = isAnswerKeyReady(questions, exam.answerKeys);
   perfLog("capture-page", {
     tokenMs,
     examMs,

@@ -62,4 +62,35 @@ assert.equal(initialScore.maxScore, 13);
 assert.equal(changedScore.totalScore, 134);
 assert.equal(changedScore.maxScore, 257);
 
+const partialExtractionScore = gradeSubmission({
+  questions: Array.from({ length: 7 }, (_, index) => ({
+    number: index + 14,
+    points: 1,
+    options: [
+      { label: "A", isCorrect: true },
+      { label: "B", isCorrect: false },
+    ],
+  })),
+  questionCount: 20,
+  correctAnswers: Array.from({ length: 20 }, (_, index) => ({
+    question: index + 1,
+    answer: "A",
+  })),
+  extractedAnswers: Array.from({ length: 7 }, (_, index) => ({
+    questionNumber: index + 14,
+    selectedLabel: "A",
+  })),
+});
+
+assert.equal(partialExtractionScore.totalScore, 7);
+assert.equal(partialExtractionScore.maxScore, 20);
+assert.equal(partialExtractionScore.rows.length, 20);
+assert.deepEqual(
+  partialExtractionScore.rows.slice(0, 13).map((row) => ({
+    selectedLabel: row.selectedLabel,
+    isCorrect: row.isCorrect,
+  })),
+  Array.from({ length: 13 }, () => ({ selectedLabel: "", isCorrect: false }))
+);
+
 console.info("grading self-check ok");

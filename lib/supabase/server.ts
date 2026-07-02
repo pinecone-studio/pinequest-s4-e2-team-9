@@ -9,10 +9,18 @@ export async function createServerSupabaseClient(): Promise<SupabaseClient> {
   return createSupabaseClient({
     getItem: (key) => cookieStore.get(key)?.value ?? null,
     setItem: (key, value) => {
-      cookieStore.set(key, value, cookieOptions);
+      try {
+        cookieStore.set(key, value, cookieOptions);
+      } catch {
+        // Server Components can read cookies, but cannot mutate response cookies.
+      }
     },
     removeItem: (key) => {
-      cookieStore.delete(key);
+      try {
+        cookieStore.delete(key);
+      } catch {
+        // Server Components can read cookies, but cannot mutate response cookies.
+      }
     },
     isServer: true,
   });

@@ -2,7 +2,6 @@
 
 import { prisma } from "@/lib/prisma";
 import {
-  analyzeExamMaterial,
   analyzeExamMaterialPages,
   type ExamMaterialAnalysis,
   type ExamMaterialQuestion,
@@ -27,11 +26,7 @@ export async function createExamAction(formData: FormData) {
   const subject = String(formData.get("subject") || "").trim();
   const classroomId = String(formData.get("classroomId") || "").trim();
   const manualQuestionCount = Number(formData.get("questionCount") || 0);
-  const material = formData.get("material");
-  const materialFile =
-    typeof File !== "undefined" && material instanceof File && material.size > 0
-      ? material
-      : null;
+  const materialFiles = getMaterialFiles(formData);
 
   if (
     !title ||
@@ -43,10 +38,14 @@ export async function createExamAction(formData: FormData) {
   }
 
   if (
-    !materialFile &&
+    materialFiles.length === 0 &&
     (!Number.isInteger(manualQuestionCount) || manualQuestionCount < 1)
   ) {
     throw new Error("Асуултын тоо дутуу байна.");
+  }
+
+  if (materialFiles.some((file) => !isSupportedMaterialFile(file))) {
+    throw new Error("Зөвхөн зураг эсвэл PDF файл оруулна уу.");
   }
 
   const classroom = await prisma.classroom.findFirst({
@@ -58,19 +57,26 @@ export async function createExamAction(formData: FormData) {
     throw new Error("Анги олдсонгүй.");
   }
 
-  console.info("[createExamAction] material exists", Boolean(materialFile));
+  console.info("[createExamAction] material page count", materialFiles.length);
 
-  if (materialFile) {
-    console.info("[createExamAction] material name", materialFile.name);
-    console.info("[createExamAction] material type", materialFile.type);
-    console.info("[createExamAction] material size", materialFile.size);
+  for (const [index, file] of materialFiles.entries()) {
+    console.info("[createExamAction] material page", index + 1, {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+    });
   }
 
   let createdQuestionsCount = 0;
   let examId = "";
 
-  if (materialFile) {
-    const analysis = await analyzeExamMaterial(materialFile);
+  if (materialFiles.length > 0) {
+    const analysis = await analyzeExamMaterialPages(
+      materialFiles.map((file, index) => ({
+        file,
+        pageNumber: index + 1,
+      }))
+    );
     console.info("[createExamAction] AI confidence", analysis.confidence);
     console.info("[createExamAction] AI questionCount", analysis.questionCount);
     console.info("[createExamAction] AI questions length", analysis.questions.length);
@@ -95,34 +101,44 @@ export async function createExamAction(formData: FormData) {
       },
     });
     examId = exam.id;
-    let savedStoragePath: string | null = null;
+    const savedStoragePaths: string[] = [];
     try {
-      const saved = await saveExamMaterialPageFile({
-        file: materialFile,
-        examId,
-        pageNumber: 1,
-      });
-      savedStoragePath = saved.storagePath;
+      const pages: Array<{
+        examId: string;
+        pageNumber: number;
+        fileName: string | null;
+        mimeType: string | null;
+        storagePath: string;
+        publicUrl: string | null;
+      }> = [];
+
+      for (const [index, file] of materialFiles.entries()) {
+        const saved = await saveExamMaterialPageFile({
+          file,
+          examId,
+          pageNumber: index + 1,
+        });
+        savedStoragePaths.push(saved.storagePath);
+        pages.push({
+          examId,
+          pageNumber: index + 1,
+          fileName: saved.fileName,
+          mimeType: saved.mimeType,
+          storagePath: saved.storagePath,
+          publicUrl: saved.publicUrl,
+        });
+      }
 
       await prisma.$transaction([
-        prisma.examMaterialPage.create({
-          data: {
-            examId,
-            pageNumber: 1,
-            fileName: saved.fileName,
-            mimeType: saved.mimeType,
-            storagePath: saved.storagePath,
-            publicUrl: saved.publicUrl,
-          },
-        }),
+        prisma.examMaterialPage.createMany({ data: pages }),
         prisma.exam.update({
           where: { id: examId },
-          data: { materialUrl: saved.publicUrl ?? saved.storagePath },
+          data: { materialUrl: pages[0]?.publicUrl ?? pages[0]?.storagePath ?? null },
         }),
       ]);
     } catch (error) {
-      if (savedStoragePath) {
-        await deleteExamMaterialStorageObjects([savedStoragePath]);
+      if (savedStoragePaths.length > 0) {
+        await deleteExamMaterialStorageObjects(savedStoragePaths);
       }
       await prisma.exam.delete({ where: { id: examId } }).catch(() => null);
       throw error;
@@ -152,6 +168,12 @@ export async function createExamAction(formData: FormData) {
   revalidatePath("/classrooms");
   revalidatePath(`/classrooms/${classroomId}`);
   redirect(`/exams/${examId}/answer-key`);
+}
+
+function getMaterialFiles(formData: FormData) {
+  return ["materialFiles", "materialFile", "material"]
+    .flatMap((name) => formData.getAll(name))
+    .filter((value): value is File => typeof File !== "undefined" && value instanceof File && value.size > 0);
 }
 
 export async function replaceExamMaterialAction(formData: FormData) {
@@ -390,6 +412,8 @@ export async function processExamMaterialPagesAction(formData: FormData) {
     }
 
     const questions = buildQuestions(analysis);
+    console.info("[processExamMaterialPagesAction] AI questionCount", analysis.questionCount);
+    console.info("[processExamMaterialPagesAction] persisted questions count", questions.length);
     const answerKeys = questions.flatMap((question) => {
       const correct = question.options.create.find((option) => option.isCorrect);
 
@@ -451,8 +475,7 @@ export async function processExamMaterialPagesAction(formData: FormData) {
 
 function buildQuestions(analysis: ExamMaterialAnalysis) {
   const usedNumbers = new Set<number>();
-
-  return analysis.questions.map((question, index) => {
+  const parsedQuestions = analysis.questions.map((question, index) => {
     const number = getUniqueQuestionNumber(question.number, index, usedNumbers);
     const options = normalizeOptions(question.options);
 
@@ -464,6 +487,27 @@ function buildQuestions(analysis: ExamMaterialAnalysis) {
       options: { create: options },
     };
   });
+  const targetQuestionCount = Math.max(
+    analysis.questionCount ?? 0,
+    ...parsedQuestions.map((question) => question.number)
+  );
+  const byNumber = new Map(parsedQuestions.map((question) => [question.number, question]));
+
+  return Array.from({ length: targetQuestionCount }, (_, index) => {
+    const number = index + 1;
+
+    return byNumber.get(number) ?? buildBlankQuestion(number);
+  });
+}
+
+function buildBlankQuestion(number: number) {
+  return {
+    number,
+    text: "",
+    points: 1,
+    sourcePageNumber: null,
+    options: { create: normalizeOptions([]) },
+  };
 }
 
 function getErrorMessage(error: unknown) {
@@ -482,12 +526,7 @@ function getUniqueQuestionNumber(number: number, index: number, usedNumbers: Set
 }
 
 function buildBlankQuestions(questionCount: number) {
-  return Array.from({ length: questionCount }, (_, index) => ({
-    number: index + 1,
-    text: "",
-    points: 1,
-    options: { create: normalizeOptions([]) },
-  }));
+  return Array.from({ length: questionCount }, (_, index) => buildBlankQuestion(index + 1));
 }
 
 function normalizeOptions(options: ExamMaterialQuestion["options"]) {

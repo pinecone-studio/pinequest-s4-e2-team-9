@@ -4,13 +4,15 @@ import { ArrowLeft } from "lucide-react";
 import SubmissionMaterialReviewLayout from "@/components/exams/submission-material-review-layout";
 import SubmissionReviewForm from "@/components/exams/submission-review-form";
 import PageHeader from "@/components/layout/page-header";
-import { gradeSubmission } from "@/lib/grading";
+import { expandQuestionsToCount, gradeSubmission } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { getSubmissionImagePreview } from "@/lib/submission-image-storage";
 import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { getSubmissionPageDisplayUrl } from "@/lib/upload-storage";
+
+const defaultOptionLabels = ["A", "B", "C", "D"];
 
 export default async function SubmissionReviewPage({
   params,
@@ -54,6 +56,7 @@ export default async function SubmissionReviewPage({
           id: true,
           title: true,
           subject: true,
+          questionCount: true,
           classroom: { select: { name: true } },
           answerKeys: {
             orderBy: { question: "asc" },
@@ -88,31 +91,34 @@ export default async function SubmissionReviewPage({
     notFound();
   }
 
+  const gradeQuestions = expandQuestionsToCount(
+    submission.exam.questions,
+    submission.exam.questionCount,
+    submission.exam.answerKeys
+  );
   const grading = gradeSubmission({
-    questions: submission.exam.questions,
+    questions: gradeQuestions,
     correctAnswers: submission.exam.answerKeys,
     extractedAnswers: submission.answers.map((answer) => ({
       questionNumber: answer.question,
       selectedLabel: answer.selected,
     })),
+    questionCount: submission.exam.questionCount,
   });
-  const rowsByQuestion = new Map(
-    grading.rows.map((row) => [row.questionNumber, row])
+  const questionsByNumber = new Map(
+    submission.exam.questions.map((question) => [question.number, question])
   );
-  const questions = submission.exam.questions.map((question) => {
-    const row = rowsByQuestion.get(question.number);
+  const questions = grading.rows.map((row) => {
+    const question = questionsByNumber.get(row.questionNumber);
 
     return {
-      number: question.number,
-      text: question.text,
-      points: question.points,
-      sourcePageNumber: question.sourcePageNumber,
-      selectedLabel: row?.selectedLabel ?? "",
-      correctLabel: row?.correctLabel ?? "",
-      options: question.options.map((option) => ({
-        label: option.label,
-        text: option.text,
-      })),
+      number: row.questionNumber,
+      text: question?.text ?? "",
+      points: row.maxPoints,
+      sourcePageNumber: question?.sourcePageNumber ?? row.sourcePageNumber,
+      selectedLabel: row.selectedLabel,
+      correctLabel: row.correctLabel,
+      options: getReviewOptions(question?.options, row.correctLabel),
     };
   });
   const pages = await Promise.all(
@@ -214,4 +220,24 @@ function formatNumber(value: number) {
 
 function formatPageCount(value: number) {
   return `${value || 1} хуудас`;
+}
+
+function getReviewOptions(
+  options: Array<{ label: string; text: string }> | undefined,
+  correctLabel: string
+) {
+  if (options?.length) {
+    return options.map((option) => ({
+      label: option.label,
+      text: option.text,
+    }));
+  }
+
+  const labels = new Set(defaultOptionLabels);
+
+  if (correctLabel) {
+    labels.add(correctLabel);
+  }
+
+  return Array.from(labels).map((label) => ({ label, text: "" }));
 }

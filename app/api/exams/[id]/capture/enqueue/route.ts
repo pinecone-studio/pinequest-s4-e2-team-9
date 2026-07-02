@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
+import { expandQuestionsToCount } from "@/lib/grading";
 import { msSince, perfLog } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { saveSubmissionPageFile } from "@/lib/submission-image-storage";
@@ -42,6 +43,7 @@ export async function POST(
       where: { id: examId, captureToken: token },
       select: {
         id: true,
+        questionCount: true,
         classroom: { select: { students: { select: { id: true } } } },
         answerKeys: {
           orderBy: { question: "asc" },
@@ -66,7 +68,13 @@ export async function POST(
       return jsonError("Сурагч энэ ангид бүртгэлгүй байна.", 400);
     }
 
-    if (!isAnswerKeyReady(exam.questions, exam.answerKeys)) {
+    const questions = expandQuestionsToCount(
+      exam.questions,
+      exam.questionCount,
+      exam.answerKeys
+    );
+
+    if (!isAnswerKeyReady(questions, exam.answerKeys)) {
       return jsonError("Зөв хариулт бүрэн баталгаажаагүй байна.", 400);
     }
 

@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { ArrowLeft, Download, Inbox, ListChecks, UploadCloud } from "lucide-react";
 import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import PageHeader from "@/components/layout/page-header";
+import { expandQuestionsToCount } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import {
@@ -80,13 +81,18 @@ export default async function ResultsPage({
     totalMs: msSince(totalStartedAt),
   });
 
-  const questionCount = exam.questions.length || exam.questionCount;
-  const totalPoints = exam.questions.reduce(
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const questionCount = questions.length;
+  const totalPoints = questions.reduce(
     (sum, question) => sum + safeNumber(question.points),
     0
   );
   const signatureSeed = buildAnswerKeySignatureSeed({
-    questions: exam.questions,
+    questions,
     answerKeys: exam.answerKeys,
   });
   const submissionSummary = summarizeSubmissions(exam.submissions, signatureSeed);
@@ -314,7 +320,7 @@ export default async function ResultsPage({
         <section className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-bold text-stone-900">Даалгаврын гүйцэтгэл</h2>
 
-          {exam.questions.length === 0 ? (
+          {questions.length === 0 ? (
             <div className="mt-5 rounded-lg border border-dashed border-stone-200 bg-stone-50/60 p-8 text-center">
               <Inbox className="mx-auto mb-3 size-8 text-[#8B5E3C]" aria-hidden="true" />
               <p className="text-sm text-stone-500">Асуулт бүртгэгдээгүй байна.</p>
@@ -333,7 +339,7 @@ export default async function ResultsPage({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-200">
-                  {exam.questions.map((question) => {
+                  {questions.map((question) => {
                     const answers = savedSubmissions.map((submission) =>
                       submission.answers.find((answer) => answer.question === question.number)
                     );
@@ -346,7 +352,7 @@ export default async function ResultsPage({
                         : Math.round((correct / savedSubmissions.length) * 100);
 
                     return (
-                      <tr key={question.id} className="hover:bg-stone-50/60">
+                      <tr key={question.number} className="hover:bg-stone-50/60">
                         <td className="px-4 py-3 font-semibold text-stone-900">
                           {question.number}-р асуулт
                         </td>

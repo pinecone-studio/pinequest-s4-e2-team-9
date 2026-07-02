@@ -1,22 +1,26 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
-import { gradeSubmission } from "@/lib/grading";
-import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
-import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
+import { expandQuestionsToCount, gradeSubmission } from "@/lib/grading";
+import { generateCaptureToken } from "@/lib/capture-token";
+import { processSubmissionByToken } from "@/lib/submission-processing";
+import { saveSubmissionPageFile } from "@/lib/submission-image-storage";
 import { deleteSubmissionStorageObjects } from "@/lib/upload-storage";
 import { msSince, perfLog } from "@/lib/perf";
-import {
-  decideProcessedSubmissionStatus,
-  submissionStatuses,
-} from "@/lib/submission-state";
+import { submissionStatuses } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-const imageTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const answerFileTypes = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "application/pdf",
+]);
 
 export async function createSubmissionDraftAction(formData: FormData) {
   const actionStartedAt = Date.now();
@@ -27,11 +31,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
   const originalMimeType = String(formData.get("originalMimeType") || "").trim();
   const compressedMimeType = String(formData.get("compressedMimeType") || "").trim();
   const captureToken = String(formData.get("captureToken") || "").trim();
-  const answerSheet = formData.get("answerSheet");
-  const file =
-    typeof File !== "undefined" && answerSheet instanceof File && answerSheet.size > 0
-      ? answerSheet
-      : null;
+  const files = getAnswerFiles(formData);
 
   if (!examId) {
     redirect("/dashboard");
@@ -47,19 +47,29 @@ export async function createSubmissionDraftAction(formData: FormData) {
     redirect(`${returnPath}${returnQuery}error=student`);
   }
 
-  if (!file || !imageTypes.has(file.type)) {
+  if (files.length === 0 || files.some((file) => !answerFileTypes.has(file.type))) {
     redirect(`${returnPath}${returnQuery}error=file`);
   }
 
   console.info(
-    `[submission-speed] upload name=${file.name} mime=${file.type} sizeBytes=${file.size} originalSizeBytes=${originalImageSize ?? "unknown"} compressedSizeBytes=${compressedImageSize ?? "unknown"} originalMime=${originalMimeType || "unknown"} compressedMime=${compressedMimeType || "unknown"}`
+    `[submission-speed] upload pageCount=${files.length} originalSizeBytes=${originalImageSize ?? "unknown"} compressedSizeBytes=${compressedImageSize ?? "unknown"} originalMime=${originalMimeType || "unknown"} compressedMime=${compressedMimeType || "unknown"}`
   );
+  for (const [index, file] of files.entries()) {
+    console.info("[submission-speed] upload page", index + 1, {
+      name: file.name,
+      mime: file.type,
+      sizeBytes: file.size,
+    });
+  }
 
   const exam = await prisma.exam.findFirst({
     where: captureToken
       ? { id: examId, captureToken }
       : { id: examId, ownerUserId: user?.id },
     select: {
+      id: true,
+      captureToken: true,
+      questionCount: true,
       classroom: { select: { students: { select: { id: true } } } },
       answerKeys: {
         orderBy: { question: "asc" },
@@ -88,46 +98,25 @@ export async function createSubmissionDraftAction(formData: FormData) {
     redirect(`${returnPath}${returnQuery}error=student`);
   }
 
-  const answerKeyReady = isAnswerKeyReady(exam.questions, exam.answerKeys);
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const answerKeyReady = isAnswerKeyReady(questions, exam.answerKeys);
 
   if (!answerKeyReady) {
     redirect(`${returnPath}${returnQuery}error=answerKey`);
   }
 
-  const questionNumbers = exam.questions.map((question) => question.number);
-  const optionLabelsByQuestion = Object.fromEntries(
-    exam.questions.map((question) => [
-      question.number,
-      question.options.map((option) => option.label),
-    ])
-  );
-  const geminiStartedAt = Date.now();
-  const analysis = await analyzeStudentAnswerSheet(
-    file,
-    questionNumbers,
-    optionLabelsByQuestion
-  );
-  console.info(`[submission-speed] geminiMs=${Date.now() - geminiStartedAt}`);
+  const processingToken = exam.captureToken ?? generateCaptureToken();
 
-  const gradingStartedAt = Date.now();
-  const grading = gradeSubmission({
-    questions: exam.questions,
-    correctAnswers: exam.answerKeys,
-    extractedAnswers: analysis.answers,
-  });
-  const statusDecision = decideProcessedSubmissionStatus({
-    analysis,
-    questionNumbers,
-    optionLabelsByQuestion,
-    answerKeyReady,
-  });
-  console.info(`[submission-speed] gradingMs=${Date.now() - gradingStartedAt}`);
-
-  const imageUrl = await saveSubmissionImageFile({
-    file,
-    examId,
-    clientSubmissionKey: randomUUID(),
-  });
+  if (!exam.captureToken) {
+    await prisma.exam.update({
+      where: { id: exam.id },
+      data: { captureToken: processingToken },
+    });
+  }
   const dbStartedAt = Date.now();
   let oldStoragePaths: string[] = [];
   const submission = await prisma.$transaction(
@@ -161,21 +150,14 @@ export async function createSubmissionDraftAction(formData: FormData) {
             id: existingSubmission.id,
           },
           data: {
-            imageUrl,
-            status: statusDecision.status,
-            score: grading.totalScore,
-            total: grading.maxScore,
-            percentage: grading.percentage,
-            pageCount: 1,
-            gradingDetails: grading.rows,
+            imageUrl: null,
+            status: "PROCESSING",
+            score: 0,
+            total: 0,
+            percentage: 0,
+            pageCount: files.length,
+            gradingDetails: Prisma.JsonNull,
           },
-        });
-
-        await tx.submissionAnswer.createMany({
-          data: grading.rows.map((row) => ({
-            ...toSubmissionAnswerCreate(row),
-            submissionId: updatedSubmission.id,
-          })),
         });
 
         return updatedSubmission;
@@ -185,34 +167,69 @@ export async function createSubmissionDraftAction(formData: FormData) {
         data: {
           examId,
           studentId,
-          imageUrl,
-          status: statusDecision.status,
-          score: grading.totalScore,
-          total: grading.maxScore,
-          percentage: grading.percentage,
-          pageCount: 1,
-          gradingDetails: grading.rows,
+          imageUrl: null,
+          status: "PROCESSING",
+          pageCount: files.length,
         },
-      });
-
-      await tx.submissionAnswer.createMany({
-        data: grading.rows.map((row) => ({
-          ...toSubmissionAnswerCreate(row),
-          submissionId: createdSubmission.id,
-        })),
       });
 
       return createdSubmission;
     },
     { timeout: 30000 }
   );
+  const pages = await Promise.all(
+    files.map(async (file, index) => {
+      const pageNumber = index + 1;
+      const saved = await saveSubmissionPageFile({
+        file,
+        examId,
+        studentId,
+        submissionId: submission.id,
+        pageNumber,
+      });
+
+      return {
+        submissionId: submission.id,
+        pageNumber,
+        fileName: saved.fileName,
+        mimeType: saved.mimeType,
+        storagePath: saved.storagePath,
+        publicUrl: saved.publicUrl,
+      };
+    })
+  );
+
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.submissionPage.createMany({ data: pages });
+        await tx.submission.update({
+          where: { id: submission.id },
+          data: { imageUrl: pages[0]?.publicUrl ?? pages[0]?.storagePath ?? null },
+        });
+      },
+      { timeout: 30000 }
+    );
+  } catch (error) {
+    await deleteSubmissionStorageObjects(pages.map((page) => page.storagePath));
+    throw error;
+  }
+
   await deleteSubmissionStorageObjects(oldStoragePaths);
   console.info(`[submission-speed] dbSaveMs=${Date.now() - dbStartedAt}`);
 
-  console.info("[createSubmissionDraftAction] AI confidence", analysis.confidence);
-  console.info("[createSubmissionDraftAction] AI notes", analysis.notes);
-  console.info("[createSubmissionDraftAction] answers length", analysis.answers.length);
-  console.info("[createSubmissionDraftAction] status decision", statusDecision);
+  let processStatus = "FAILED";
+
+  try {
+    processStatus = (
+      await processSubmissionByToken({
+        submissionId: submission.id,
+        token: processingToken,
+      })
+    ).status;
+  } catch (error) {
+    console.error("[createSubmissionDraftAction] process failed", error);
+  }
 
   revalidatePath(`/exams/${examId}/submissions`);
   revalidatePath(`/exams/${examId}/results`);
@@ -222,10 +239,16 @@ export async function createSubmissionDraftAction(formData: FormData) {
   }
 
   redirect(
-    statusDecision.status === submissionStatuses.saved
+    processStatus === submissionStatuses.saved
       ? `/exams/${examId}/submissions?saved=1`
       : `/exams/${examId}/submissions/${submission.id}/review`
   );
+}
+
+function getAnswerFiles(formData: FormData) {
+  return ["answerFiles", "answerFile", "file", "image", "answerSheet"]
+    .flatMap((name) => formData.getAll(name))
+    .filter((value): value is File => typeof File !== "undefined" && value instanceof File && value.size > 0);
 }
 
 export async function saveReviewedSubmissionAction(formData: FormData) {
@@ -247,6 +270,7 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
       examId: true,
       exam: {
         select: {
+          questionCount: true,
           answerKeys: {
             orderBy: { question: "asc" },
             select: { question: true, answer: true },
@@ -275,7 +299,12 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
   }
 
   const parseStartedAt = Date.now();
-  const extractedAnswers = submission.exam.questions.map((question) => ({
+  const questions = expandQuestionsToCount(
+    submission.exam.questions,
+    submission.exam.questionCount,
+    submission.exam.answerKeys
+  );
+  const extractedAnswers = questions.map((question) => ({
     questionNumber: question.number,
     selectedLabel: String(formData.get(`answer-${question.number}`) || "").trim(),
   }));
@@ -284,9 +313,10 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
 
   const gradingStartedAt = Date.now();
   const grading = gradeSubmission({
-    questions: submission.exam.questions,
+    questions,
     correctAnswers: submission.exam.answerKeys,
     extractedAnswers,
+    questionCount: submission.exam.questionCount,
   });
   const gradingMs = msSince(gradingStartedAt);
   console.info(`[review-save-speed] gradingMs=${gradingMs}`);

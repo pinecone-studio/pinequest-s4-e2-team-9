@@ -15,6 +15,13 @@ assert.deepEqual(
   pages.map((page) => page.pageNumber),
   [1, 2]
 );
+assert.deepEqual(
+  pages
+    .slice()
+    .sort((left, right) => left.pageNumber - right.pageNumber)
+    .map((page) => page.pageNumber),
+  [1, 2]
+);
 
 const savedAnswers = Array.from({ length: 13 }, (_, index) => ({
   questionNumber: index + 1,

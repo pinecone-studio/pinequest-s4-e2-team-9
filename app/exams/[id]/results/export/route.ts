@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { labelsMatch } from "@/lib/grading";
+import { expandQuestionsToCount, labelsMatch } from "@/lib/grading";
 import { msSince, perfLog } from "@/lib/perf";
 import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
@@ -20,6 +20,7 @@ export async function GET(
       id: true,
       title: true,
       subject: true,
+      questionCount: true,
       classroom: { select: { name: true } },
       answerKeys: {
         orderBy: { question: "asc" },
@@ -74,7 +75,12 @@ export async function GET(
     totalMs: msSince(totalStartedAt),
   });
 
-  const totalPoints = exam.questions.reduce(
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const totalPoints = questions.reduce(
     (sum, question) => sum + safeNumber(question.points),
     0
   );
@@ -92,7 +98,7 @@ export async function GET(
     "Хуудас",
     "Төлөв",
     "Огноо",
-    ...exam.questions.map((question) => `Асуулт ${question.number}`),
+    ...questions.map((question) => `Асуулт ${question.number}`),
   ];
   const rows = exam.submissions.map((submission) => [
     exam.title,
@@ -105,14 +111,14 @@ export async function GET(
     formatPageCount(submission.pageCount),
     getSubmissionStatusText(submission.status),
     (submission.updatedAt || submission.createdAt).toLocaleDateString("mn-MN"),
-    ...exam.questions.map((question) => {
+    ...questions.map((question) => {
       const answer = submission.answers.find(
         (item) => item.question === question.number
       );
       const selected = answer?.selected || "-";
       const correct =
         answer?.correct ||
-        question.options.find((option) => option.isCorrect)?.label ||
+        question.options?.find((option) => option.isCorrect)?.label ||
         fallbackAnswers.get(question.number) ||
         "-";
 

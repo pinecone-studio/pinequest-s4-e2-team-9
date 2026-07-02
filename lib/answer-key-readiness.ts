@@ -1,6 +1,6 @@
 type QuestionAnswerState = {
   number: number;
-  options: Array<{ isCorrect?: boolean | null }>;
+  options?: Array<{ isCorrect?: boolean | null }>;
 };
 
 type StoredAnswerKey = {
@@ -22,7 +22,7 @@ export function isAnswerKeyReady(
     questions.length > 0 &&
     questions.every(
       (question) =>
-        question.options.some((option) => option.isCorrect) ||
+        question.options?.some((option) => option.isCorrect) ||
         Boolean(fallback.get(question.number))
     )
   );

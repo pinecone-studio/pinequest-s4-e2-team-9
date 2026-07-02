@@ -6,7 +6,9 @@ import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, Smartphone } from
 import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import SubmissionUploadForm from "@/components/exams/submission-upload-form";
 import PageHeader from "@/components/layout/page-header";
+import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { generateCaptureToken } from "@/lib/capture-token";
+import { expandQuestionsToCount } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import {
@@ -44,6 +46,7 @@ export default async function SubmissionsPage({
       id: true,
       title: true,
       subject: true,
+      questionCount: true,
       classroomId: true,
       captureToken: true,
       _count: { select: { answerKeys: true, questions: true } },
@@ -97,11 +100,15 @@ export default async function SubmissionsPage({
     });
   }
 
-  const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
-  const isAnswerKeyReady =
-    exam._count.questions > 0 && exam._count.answerKeys >= exam._count.questions;
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const totalPoints = questions.reduce((sum, question) => sum + (question.points ?? 1), 0);
+  const answerKeyReady = isAnswerKeyReady(questions, exam.answerKeys);
   const signatureSeed = buildAnswerKeySignatureSeed({
-    questions: exam.questions,
+    questions,
     answerKeys: exam.answerKeys,
   });
   const submissionSummary = summarizeSubmissions(exam.submissions, signatureSeed);
@@ -155,7 +162,7 @@ export default async function SubmissionsPage({
             <span>·</span>
             <span>{exam.subject}</span>
             <span>·</span>
-            <span>{exam.questions.length} асуулт</span>
+            <span>{questions.length} асуулт</span>
             <span>·</span>
             <span>{formatNumber(totalPoints)} оноо</span>
           </div>
@@ -173,12 +180,12 @@ export default async function SubmissionsPage({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">
-                {isAnswerKeyReady
+                {answerKeyReady
                   ? "Зөв хариулт баталгаажсан"
                   : "Зөв хариулт бүрэн баталгаажаагүй байна"}
               </h2>
               <p className="mt-1 text-sm text-stone-500">
-                {isAnswerKeyReady
+                {answerKeyReady
                   ? "Сурагчийн хариултыг уншуулж дүн бодоход бэлэн."
                   : "Эхлээд асуулт бүрийн зөв хариултыг баталгаажуулна уу."}
               </p>
@@ -268,7 +275,7 @@ export default async function SubmissionsPage({
               <SubmissionUploadForm
                 examId={exam.id}
                 students={exam.classroom.students}
-                isAnswerKeyReady={isAnswerKeyReady}
+                isAnswerKeyReady={answerKeyReady}
               />
             )}
           </section>
