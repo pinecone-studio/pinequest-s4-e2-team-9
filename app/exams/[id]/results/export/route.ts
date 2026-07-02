@@ -1,8 +1,17 @@
-import { prisma } from "@/lib/prisma";
-import { labelsMatch } from "@/lib/grading";
+import { buildBagshSystemWorkbook } from "@/lib/bagshsystem-export";
 import { msSince, perfLog } from "@/lib/perf";
-import { getSubmissionStatusText } from "@/lib/submission-state";
+import { prisma } from "@/lib/prisma";
+import { submissionStatuses } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
+
+export const runtime = "nodejs";
+
+type SavedSubmission = {
+  studentId: string;
+  score: number;
+  total: number;
+  percentage: number;
+};
 
 export async function GET(
   _request: Request,
@@ -19,37 +28,26 @@ export async function GET(
     select: {
       id: true,
       title: true,
-      subject: true,
-      classroom: { select: { name: true } },
-      answerKeys: {
-        orderBy: { question: "asc" },
-        select: { question: true, answer: true },
-      },
-      questions: {
-        orderBy: { number: "asc" },
+      classroom: {
         select: {
-          number: true,
-          points: true,
-          options: {
+          students: {
             orderBy: { createdAt: "asc" },
-            select: { label: true, isCorrect: true },
+            select: { id: true, name: true, registerNumber: true },
           },
         },
       },
+      questions: {
+        orderBy: { number: "asc" },
+        select: { points: true },
+      },
       submissions: {
+        where: { status: submissionStatuses.saved },
         orderBy: { updatedAt: "desc" },
         select: {
-          status: true,
+          studentId: true,
           score: true,
           total: true,
           percentage: true,
-          createdAt: true,
-          updatedAt: true,
-          student: { select: { name: true } },
-          answers: {
-            orderBy: { question: "asc" },
-            select: { question: true, selected: true, correct: true },
-          },
         },
       },
     },
@@ -65,87 +63,53 @@ export async function GET(
 
     return new Response("Шалгалт олдсонгүй.", { status: 404 });
   }
-  perfLog("results-export", {
-    authMs,
-    exportMs,
-    submissions: exam.submissions.length,
-    questions: exam.questions.length,
-    totalMs: msSince(totalStartedAt),
-  });
+
+  if (exam.submissions.length === 0) {
+    return new Response("Хадгалсан дүн байхгүй байна.", { status: 400 });
+  }
 
   const totalPoints = exam.questions.reduce(
     (sum, question) => sum + safeNumber(question.points),
     0
   );
-  const fallbackAnswers = new Map(
-    exam.answerKeys.map((answer) => [answer.question, answer.answer])
-  );
-  const headers = [
-    "Шалгалт",
-    "Хичээл",
-    "Анги",
-    "Сурагч",
-    "Оноо",
-    "Нийт оноо",
-    "Хувь",
-    "Төлөв",
-    "Огноо",
-    ...exam.questions.map((question) => `Асуулт ${question.number}`),
-  ];
-  const rows = exam.submissions.map((submission) => [
-    exam.title,
-    exam.subject,
-    exam.classroom.name,
-    submission.student.name,
-    formatNumber(safeNumber(submission.score)),
-    formatNumber(getSubmissionTotal(submission, totalPoints)),
-    `${Math.round(getSubmissionPercentage(submission, totalPoints))}%`,
-    getSubmissionStatusText(submission.status),
-    (submission.updatedAt || submission.createdAt).toLocaleDateString("mn-MN"),
-    ...exam.questions.map((question) => {
-      const answer = submission.answers.find(
-        (item) => item.question === question.number
-      );
-      const selected = answer?.selected || "-";
-      const correct =
-        answer?.correct ||
-        question.options.find((option) => option.isCorrect)?.label ||
-        fallbackAnswers.get(question.number) ||
-        "-";
+  const submissionsByStudentId = new Map<string, SavedSubmission>();
 
-      return `${selected} / ${correct} / ${getAnswerText(selected, correct)}`;
-    }),
-  ]);
-  const csv = toCsv([headers, ...rows]);
-
-  return new Response(`\uFEFF${csv}`, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="exam-results-${exam.id}.csv"`,
-    },
-  });
-}
-
-function getAnswerText(selected: string, correct: string) {
-  if (selected === "-") {
-    return "Хоосон";
+  for (const submission of exam.submissions) {
+    if (!submissionsByStudentId.has(submission.studentId)) {
+      submissionsByStudentId.set(submission.studentId, submission);
+    }
   }
 
-  return labelsMatch(selected, correct) ? "Зөв" : "Буруу";
-}
+  const workbook = buildBagshSystemWorkbook(
+    exam.classroom.students.map((student) => {
+      const submission = submissionsByStudentId.get(student.id);
 
-function toCsv(rows: string[][]) {
-  return rows
-    .map((row) =>
-      row
-        .map((cell) => {
-          const value = String(cell ?? "");
+      return {
+        studentName: student.name,
+        registerNumber: student.registerNumber,
+        attended: Boolean(submission),
+        score: submission?.score,
+        maxScore: submission ? getSubmissionTotal(submission, totalPoints) : null,
+        percent: submission?.percentage,
+      };
+    })
+  );
+  const buffer = await workbook.xlsx.writeBuffer();
+  const filename = `bagshsystem-ready-${safeFileName(exam.title)}.xlsx`;
 
-          return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-        })
-        .join(",")
-    )
-    .join("\r\n");
+  perfLog("results-export", {
+    authMs,
+    exportMs,
+    submissions: exam.submissions.length,
+    totalMs: msSince(totalStartedAt),
+  });
+
+  return new Response(buffer, {
+    headers: {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    },
+  });
 }
 
 function getSubmissionTotal(submission: { total: number }, fallbackTotal: number) {
@@ -154,20 +118,19 @@ function getSubmissionTotal(submission: { total: number }, fallbackTotal: number
   return total > 0 ? total : fallbackTotal;
 }
 
-function getSubmissionPercentage(
-  submission: { percentage: number; score: number; total: number },
-  fallbackTotal: number
-) {
-  const percentage = safeNumber(submission.percentage);
-  const total = getSubmissionTotal(submission, fallbackTotal);
-
-  return percentage || (total > 0 ? (safeNumber(submission.score) / total) * 100 : 0);
-}
-
 function safeNumber(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function formatNumber(value: number) {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+function safeFileName(value: string) {
+  return (
+    value
+      .normalize("NFKC")
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 80) || "exam"
+  );
 }

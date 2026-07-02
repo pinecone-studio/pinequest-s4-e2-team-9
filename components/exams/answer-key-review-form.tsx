@@ -15,8 +15,14 @@ type OptionState = {
 type QuestionState = {
   id: string;
   number: number;
+  questionType: "MULTIPLE_CHOICE" | "MATCHING" | "SHORT_ANSWER" | "NUMERIC_EXPRESSION";
+  gradingMode: "exact_option" | "matching_pairs" | "numeric_equivalence" | "short_text_manual_review";
   text: string;
   points: number;
+  answerKey: string;
+  leftItems: Array<{ key: string; text: string }>;
+  rightItems: Array<{ key: string; text: string }>;
+  correctPairs: Array<{ left: string; right: string }>;
   options: OptionState[];
 };
 
@@ -158,6 +164,9 @@ export default function AnswerKeyReviewForm({
           <div key={question.id}>
             <input type="hidden" name={`question-${question.id}-text`} value={question.text} readOnly />
             <input type="hidden" name={`question-${question.id}-points`} value={question.points} readOnly />
+            <input type="hidden" name={`question-${question.id}-type`} value={question.questionType} readOnly />
+            <input type="hidden" name={`question-${question.id}-gradingMode`} value={question.gradingMode} readOnly />
+            <input type="hidden" name={`answer-${question.id}`} value={question.answerKey} readOnly />
             <input type="hidden" name={`correct-${question.id}`} value={correctOption?.id ?? ""} readOnly />
             {question.options.map((option) => (
               <div key={option.id}>
@@ -335,6 +344,7 @@ export default function AnswerKeyReviewForm({
         {questions.map((question) => {
           const isEditing = editing.has(question.id);
           const correctOption = question.options.find((option) => option.isCorrect);
+          const isOptionQuestion = question.gradingMode === "exact_option";
 
           return (
             <section key={question.id} className="rounded-xl border border-stone-200 p-5">
@@ -346,6 +356,12 @@ export default function AnswerKeyReviewForm({
                     </h2>
                     <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-[#8B5E3C]">
                       {question.points} оноо
+                    </span>
+                    <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700">
+                      {getQuestionTypeLabel(question.questionType)}
+                    </span>
+                    <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700">
+                      {getGradingModeLabel(question.gradingMode)}
                     </span>
                   </div>
                   {!isEditing ? (
@@ -395,11 +411,27 @@ export default function AnswerKeyReviewForm({
                       className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
                     />
                   </div>
+                  {!isOptionQuestion ? (
+                    <div className="lg:col-span-2">
+                      <label className="mb-1.5 block text-sm font-medium text-stone-700">
+                        Зөв хариу
+                      </label>
+                      <textarea
+                        value={question.answerKey}
+                        onChange={(event) =>
+                          updateQuestion(question.id, { answerKey: event.target.value })
+                        }
+                        rows={2}
+                        className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+                      />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
-              <div className="space-y-3">
-                {question.options.map((option) => {
+              {isOptionQuestion ? (
+                <div className="space-y-3">
+                  {question.options.map((option) => {
                   const isCorrect = correctOption?.id === option.id;
 
                   return (
@@ -468,9 +500,29 @@ export default function AnswerKeyReviewForm({
                       )}
                     </div>
                   );
-                })}
-              </div>
-              {!correctOption ? (
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-stone-200 bg-stone-50/70 p-4 text-sm text-stone-800">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                    Зөв хариу
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap font-semibold text-stone-900">
+                    {question.answerKey || "Тодорхойгүй"}
+                  </p>
+                  {question.leftItems.length || question.rightItems.length ? (
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      {question.leftItems.length ? (
+                        <AnswerItemList title="Зүүн тал" items={question.leftItems} />
+                      ) : null}
+                      {question.rightItems.length ? (
+                        <AnswerItemList title="Баруун тал" items={question.rightItems} />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+              {isOptionQuestion && !correctOption ? (
                 <p className="mt-3 text-sm font-medium text-amber-700">
                   Зөв хариулт сонгоогүй байна.
                 </p>
@@ -491,4 +543,58 @@ export default function AnswerKeyReviewForm({
       </div>
     </form>
   );
+}
+
+function AnswerItemList({
+  title,
+  items,
+}: {
+  title: string;
+  items: Array<{ key: string; text: string }>;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-stone-500">{title}</p>
+      <ul className="mt-2 space-y-1">
+        {items.map((item) => (
+          <li key={`${item.key}-${item.text}`} className="text-sm text-stone-700">
+            <span className="font-semibold text-stone-900">{item.key}.</span>{" "}
+            {item.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function getQuestionTypeLabel(type: QuestionState["questionType"]) {
+  if (type === "MATCHING") {
+    return "Харгалзуулах";
+  }
+
+  if (type === "NUMERIC_EXPRESSION") {
+    return "Тоон хариу";
+  }
+
+  if (type === "SHORT_ANSWER") {
+    return "Бичих хариу";
+  }
+
+  return "Сонгох";
+}
+
+function getGradingModeLabel(mode: QuestionState["gradingMode"]) {
+  if (mode === "matching_pairs") {
+    return "хослолоор";
+  }
+
+  if (mode === "numeric_equivalence") {
+    return "тоон тэнцүү";
+  }
+
+  if (mode === "short_text_manual_review") {
+    return "гараар хянах";
+  }
+
+  return "сонголтоор";
 }

@@ -10,6 +10,7 @@ import LoadingSubmitButton from "@/components/ui/loading-submit-button";
 type StudentOption = {
   id: string;
   name: string;
+  registerNumber: string | null;
 };
 
 type FileInfo = {
@@ -108,7 +109,7 @@ export default function SubmissionUploadForm({
           <option value="">Сурагч сонгох</option>
           {students.map((student) => (
             <option key={student.id} value={student.id}>
-              {student.name}
+              {student.registerNumber ? `${student.name} · ${student.registerNumber}` : student.name}
             </option>
           ))}
         </select>

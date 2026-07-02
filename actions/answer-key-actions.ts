@@ -3,6 +3,13 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { isValidAnswerLabel, isValidOptionLabel } from "@/lib/answer-key-parser";
+import {
+  parseStoredAnswerKey,
+  normalizeAnswerLabel,
+  updateStoredAnswerKeyAnswer,
+  type GradingMode,
+  type QuestionType,
+} from "@/lib/grading";
 import { msSince, perfLog } from "@/lib/perf";
 import { regradeExamSubmissions } from "@/lib/regrading";
 import { requireCurrentUser } from "@/lib/supabase/server";
@@ -38,6 +45,10 @@ export async function saveAnswerKeyAction(formData: FormData) {
           },
         },
       },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
     },
   });
   const loadMs = msSince(loadStartedAt);
@@ -53,41 +64,28 @@ export async function saveAnswerKeyAction(formData: FormData) {
   const questionUpdates: Array<{ id: string; text: string; points: number }> = [];
   const optionUpdates: Array<{ id: string; label: string; text: string; isCorrect: boolean }> = [];
   const answerKeys: Array<{ examId: string; question: number; answer: string }> = [];
+  const existingAnswers = new Map(
+    exam.answerKeys.map((answer) => [answer.question, answer.answer])
+  );
 
   const parseStartedAt = Date.now();
   for (const question of exam.questions) {
-    if (question.options.length < 2) {
-      throw new Error("Асуулт бүр дор хаяж 2 сонголттой байх ёстой.");
-    }
-
     const formPoints = Number(formData.get(`question-${question.id}-points`) || 0);
     const points = formPoints;
-    const correctOptionId = String(formData.get(`correct-${question.id}`) || "");
-    const correctOption = question.options.find((option) => option.id === correctOptionId);
-    const labels = question.options.map((option) =>
-      String(formData.get(`option-${option.id}-label`) || "").trim()
+    const existingAnswer = existingAnswers.get(question.number) ?? "";
+    const existingAnswerKey = parseStoredAnswerKey(existingAnswer);
+    const questionType = getQuestionType(
+      formData.get(`question-${question.id}-type`),
+      existingAnswerKey.type
     );
+    const gradingMode = getGradingMode(
+      formData.get(`question-${question.id}-gradingMode`),
+      existingAnswerKey.gradingMode
+    );
+    const isMultipleChoice = gradingMode === "exact_option";
 
     if (!Number.isFinite(points) || points <= 0) {
       throw new Error("Асуулт бүрийн оноо эерэг тоо байх ёстой.");
-    }
-
-    if (!correctOption) {
-      throw new Error("Асуулт бүрт нэг зөв хариулт сонгоно уу.");
-    }
-
-    if (labels.some((label) => !isValidOptionLabel(label))) {
-      throw new Error("Сонголтын тэмдэг хоосон байж болохгүй.");
-    }
-
-    if (new Set(labels).size !== labels.length) {
-      throw new Error("Нэг асуултын сонголтын тэмдэг давхцахгүй байх ёстой.");
-    }
-
-    const correctLabel = String(formData.get(`option-${correctOption.id}-label`) || "").trim();
-
-    if (!isValidAnswerLabel(correctLabel, labels)) {
-      throw new Error("Зөв хариултын тэмдэг сонголтуудтай таарахгүй байна.");
     }
 
     const questionText = String(formData.get(`question-${question.id}-text`) || "").trim();
@@ -100,28 +98,80 @@ export async function saveAnswerKeyAction(formData: FormData) {
       });
     }
 
-    for (const option of question.options) {
-      const optionUpdate = {
-        id: option.id,
-        label: String(formData.get(`option-${option.id}-label`) || "").trim(),
-        text: String(formData.get(`option-${option.id}-text`) || "").trim(),
-        isCorrect: option.id === correctOptionId,
-      };
-
-      if (
-        option.label !== optionUpdate.label ||
-        option.text !== optionUpdate.text ||
-        option.isCorrect !== optionUpdate.isCorrect
-      ) {
-        optionUpdates.push(optionUpdate);
+    if (isMultipleChoice) {
+      if (question.options.length < 2) {
+        throw new Error("Сонгох тестийн асуулт дор хаяж 2 сонголттой байх ёстой.");
       }
-    }
 
-    answerKeys.push({
-      examId,
-      question: question.number,
-      answer: correctLabel,
-    });
+      const correctOptionId = String(formData.get(`correct-${question.id}`) || "");
+      const correctOption = question.options.find((option) => option.id === correctOptionId);
+      const labelByOptionId = new Map(
+        question.options.map((option) => {
+          const rawLabel = String(formData.get(`option-${option.id}-label`) || "").trim();
+
+          return [option.id, normalizeAnswerLabel(rawLabel) || rawLabel];
+        })
+      );
+      const labels = question.options.map((option) => labelByOptionId.get(option.id) ?? "");
+
+      if (!correctOption) {
+        throw new Error("Сонгох тестийн асуулт бүрт нэг зөв хариулт сонгоно уу.");
+      }
+
+      if (labels.some((label) => !isValidOptionLabel(label))) {
+        throw new Error("Сонголтын тэмдэг хоосон байж болохгүй.");
+      }
+
+      if (new Set(labels).size !== labels.length) {
+        throw new Error("Нэг асуултын сонголтын тэмдэг давхцахгүй байх ёстой.");
+      }
+
+      const correctLabel = labelByOptionId.get(correctOption.id) ?? "";
+
+      if (!isValidAnswerLabel(correctLabel, labels)) {
+        throw new Error("Зөв хариултын тэмдэг сонголтуудтай таарахгүй байна.");
+      }
+
+      for (const option of question.options) {
+        const optionUpdate = {
+          id: option.id,
+          label: labelByOptionId.get(option.id) ?? "",
+          text: String(formData.get(`option-${option.id}-text`) || "").trim(),
+          isCorrect: option.id === correctOptionId,
+        };
+
+        if (
+          option.label !== optionUpdate.label ||
+          option.text !== optionUpdate.text ||
+          option.isCorrect !== optionUpdate.isCorrect
+        ) {
+          optionUpdates.push(optionUpdate);
+        }
+      }
+
+      answerKeys.push({
+        examId,
+        question: question.number,
+        answer: correctLabel,
+      });
+    } else {
+      const answer = String(formData.get(`answer-${question.id}`) || "").trim();
+
+      if (!answer) {
+        throw new Error("Бичгээр хариулах асуултын зөв хариу хоосон байж болохгүй.");
+      }
+
+      answerKeys.push({
+        examId,
+        question: question.number,
+        answer: updateStoredAnswerKeyAnswer({
+          existing: existingAnswer,
+          answer,
+          type: questionType,
+          gradingMode,
+        }),
+      });
+    }
   }
   const parseMs = msSince(parseStartedAt);
 
@@ -195,4 +245,22 @@ export async function saveAnswerKeyAction(formData: FormData) {
     totalMs: msSince(totalStartedAt),
   });
   redirect(`/exams/${examId}/submissions`);
+}
+
+function getQuestionType(value: FormDataEntryValue | null, fallback: QuestionType) {
+  return value === "MULTIPLE_CHOICE" ||
+    value === "MATCHING" ||
+    value === "SHORT_ANSWER" ||
+    value === "NUMERIC_EXPRESSION"
+    ? value
+    : fallback;
+}
+
+function getGradingMode(value: FormDataEntryValue | null, fallback: GradingMode) {
+  return value === "exact_option" ||
+    value === "matching_pairs" ||
+    value === "numeric_equivalence" ||
+    value === "short_text_manual_review"
+    ? value
+    : fallback;
 }

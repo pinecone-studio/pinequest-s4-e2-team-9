@@ -1,10 +1,10 @@
 import { revalidatePath } from "next/cache";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
-import { gradeSubmission } from "@/lib/grading";
+import { gradeSubmission, normalizeAnswerLabel } from "@/lib/grading";
 import { msSince, perfLog } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { readSubmissionImageFile } from "@/lib/submission-image-storage";
-import { decideProcessedSubmissionStatus } from "@/lib/submission-state";
+import { decideProcessedSubmissionStatus, submissionStatuses } from "@/lib/submission-state";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
 
 export const runtime = "nodejs";
@@ -75,7 +75,7 @@ export async function POST(
     const optionLabelsByQuestion = Object.fromEntries(
       submission.exam.questions.map((question) => [
         question.number,
-        question.options.map((option) => option.label),
+        question.options.map((option) => normalizeAnswerLabel(option.label) || option.label),
       ])
     );
 
@@ -94,8 +94,8 @@ export async function POST(
     const geminiStartedAt = Date.now();
     const analysis = await analyzeStudentAnswerSheet(
       imageFile,
-      questionNumbers,
-      optionLabelsByQuestion
+      submission.exam.questions,
+      submission.exam.answerKeys
     );
     const geminiMs = msSince(geminiStartedAt);
     console.info(`[submission-process] geminiMs=${geminiMs} submissionId=${submissionId}`);
@@ -116,6 +116,7 @@ export async function POST(
       optionLabelsByQuestion,
       answerKeyReady: isAnswerKeyReady(submission.exam.questions, submission.exam.answerKeys),
     });
+    const finalStatus = grading.needsReview ? submissionStatuses.draft : statusDecision.status;
     const gradeMs = msSince(gradeStartedAt);
 
     const dbStartedAt = Date.now();
@@ -126,7 +127,7 @@ export async function POST(
           data: grading.rows.map((row) => ({
             submissionId,
             question: row.questionNumber,
-            selected: row.selectedLabel,
+            selected: row.selectedStoredAnswer,
             correct: row.correctLabel,
             isCorrect: row.isCorrect,
             earnedPoints: row.earnedPoints,
@@ -136,7 +137,7 @@ export async function POST(
         await tx.submission.update({
           where: { id: submissionId },
           data: {
-            status: statusDecision.status,
+            status: finalStatus,
             score: grading.totalScore,
             total: grading.maxScore,
             percentage: grading.percentage,
@@ -159,10 +160,10 @@ export async function POST(
       totalMs: msSince(totalStartedAt),
     });
     console.info(
-      `[submission-process] completed submissionId=${submissionId} status=${statusDecision.status} reviewReason=${statusDecision.reviewReason || "none"}`
+      `[submission-process] completed submissionId=${submissionId} status=${finalStatus} reviewReason=${statusDecision.reviewReason || (grading.needsReview ? "grading_needs_review" : "none")}`
     );
 
-    return Response.json({ ok: true, status: statusDecision.status });
+    return Response.json({ ok: true, status: finalStatus });
   } catch (error) {
     console.error(
       `[submission-process] failed submissionId=${submissionId} error=${getErrorMessage(error)}`

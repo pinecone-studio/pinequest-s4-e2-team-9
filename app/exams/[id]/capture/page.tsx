@@ -41,7 +41,10 @@ export default async function CapturePage({
           classroom: {
             select: {
               name: true,
-              students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
+              students: {
+                orderBy: { createdAt: "asc" },
+                select: { id: true, name: true, registerNumber: true },
+              },
             },
           },
         },

@@ -49,7 +49,10 @@ export default async function SubmissionsPage({
       classroom: {
         select: {
           name: true,
-          students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
+          students: {
+            orderBy: { createdAt: "asc" },
+            select: { id: true, name: true, registerNumber: true },
+          },
         },
       },
       questions: {
@@ -66,7 +69,7 @@ export default async function SubmissionsPage({
           percentage: true,
           createdAt: true,
           updatedAt: true,
-          student: { select: { id: true, name: true } },
+          student: { select: { id: true, name: true, registerNumber: true } },
         },
       },
     },
@@ -292,7 +295,12 @@ export default async function SubmissionsPage({
                     {exam.submissions.map((submission) => (
                       <tr key={submission.id} className="hover:bg-stone-50/60">
                         <td className="px-4 py-3 font-semibold text-stone-900">
-                          {submission.student.name}
+                          <span className="block">{submission.student.name}</span>
+                          {submission.student.registerNumber ? (
+                            <span className="mt-1 block text-xs font-medium text-stone-500">
+                              {submission.student.registerNumber}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           {formatNumber(submission.score)} / {formatNumber(submission.total)}

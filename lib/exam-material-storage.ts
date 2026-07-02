@@ -1,10 +1,10 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import { createSupabaseAdminClient, getStorageBucketName } from "@/lib/supabase/admin";
 
 const publicRoot = path.join(process.cwd(), "public");
-const uploadRoot = path.join(publicRoot, "uploads", "exam-materials");
 
 export type ExamMaterialPreview = {
   url: string | null;
@@ -15,14 +15,23 @@ export type ExamMaterialPreview = {
 
 export async function saveExamMaterialFile(file: File) {
   const safeName = safeSegment(file.name || "exam-material");
-  const relativePath = `/uploads/exam-materials/${randomUUID()}-${safeName}`;
-  const absolutePath = path.join(publicRoot, relativePath);
+  const storagePath = `exam-materials/${randomUUID()}-${safeName}`;
+  const bucket = getStorageBucketName();
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase.storage.from(bucket).upload(
+    storagePath,
+    Buffer.from(await file.arrayBuffer()),
+    {
+      contentType: file.type || getMimeType(storagePath) || "application/octet-stream",
+      upsert: true,
+    }
+  );
 
-  // ponytail: local public storage; move to object storage when uploads must survive deploys.
-  await mkdir(uploadRoot, { recursive: true });
-  await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
+  if (error) {
+    throw new Error(`Supabase exam material upload failed: ${error.message}`);
+  }
 
-  return relativePath;
+  return supabase.storage.from(bucket).getPublicUrl(storagePath).data.publicUrl;
 }
 
 export async function getExamMaterialPreview(

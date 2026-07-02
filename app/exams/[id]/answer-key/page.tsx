@@ -5,6 +5,12 @@ import AnswerKeyReviewLayout from "@/components/exams/answer-key-review-layout";
 import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
 import PageHeader from "@/components/layout/page-header";
 import { getExamMaterialPreview } from "@/lib/exam-material-storage";
+import {
+  formatStoredAnswerKey,
+  labelsMatch,
+  normalizeAnswerLabel,
+  parseStoredAnswerKey,
+} from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
@@ -70,24 +76,16 @@ export default async function AnswerKeyPage({
     exam.answerKeys.map((item) => [item.question, item.answer])
   );
   const questions = exam.questions.map((question) => ({
-    id: question.id,
-    number: question.number,
-    text: question.text,
-    points: question.points,
-    options: question.options.map((option) => ({
-      id: option.id,
-      label: option.label,
-      text: option.text,
-      isCorrect: existingAnswers.get(question.number) === option.label || option.isCorrect,
-    })),
+    ...toReviewQuestion(question, existingAnswers.get(question.number)),
   }));
   const hasEmptyContent =
     questions.length === 0 ||
     questions.some(
       (question) =>
         !question.text.trim() ||
-        question.options.length < 2 ||
-        question.options.every((option) => !option.text.trim())
+        (question.gradingMode === "exact_option" &&
+          (question.options.length < 2 ||
+            question.options.every((option) => !option.text.trim())))
     );
   const hasNoParsedContent =
     questions.length === 0 ||
@@ -192,4 +190,45 @@ export default async function AnswerKeyPage({
       </div>
     </div>
   );
+}
+
+function toReviewQuestion(
+  question: {
+    id: string;
+    number: number;
+    text: string;
+    points: number;
+    options: Array<{ id: string; label: string; text: string; isCorrect: boolean }>;
+  },
+  storedAnswer: string | undefined
+) {
+  const answerKey = parseStoredAnswerKey(storedAnswer);
+  const options = question.options.map((option) => ({
+    ...option,
+    label: normalizeAnswerLabel(option.label) || option.label,
+  }));
+  const optionCorrect = options.find((option) => option.isCorrect)?.label ?? "";
+  const correctAnswer = formatStoredAnswerKey(storedAnswer) || optionCorrect;
+
+  return {
+    id: question.id,
+    number: question.number,
+    text: question.text,
+    points: question.points,
+    questionType: answerKey.type,
+    gradingMode: answerKey.gradingMode,
+    answerKey: correctAnswer,
+    leftItems: answerKey.leftItems,
+    rightItems: answerKey.rightItems,
+    correctPairs: answerKey.correctPairs,
+    options: options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      text: option.text,
+      isCorrect:
+        (answerKey.gradingMode === "exact_option" &&
+          labelsMatch(correctAnswer, option.label)) ||
+        option.isCorrect,
+    })),
+  };
 }

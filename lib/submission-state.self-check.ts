@@ -7,10 +7,10 @@ import {
 
 const questionNumbers = [1, 2, 3, 4];
 const optionLabelsByQuestion = {
-  1: ["A", "B", "C", "D"],
-  2: ["A", "B", "C", "D"],
-  3: ["A", "B", "C", "D"],
-  4: ["A", "B", "C", "D"],
+  1: ["a", "b", "c", "d"],
+  2: ["a", "b", "c", "d"],
+  3: ["a", "b", "c", "d"],
+  4: ["a", "b", "c", "d"],
 };
 
 const confident = decideProcessedSubmissionStatus({
@@ -20,10 +20,10 @@ const confident = decideProcessedSubmissionStatus({
   analysis: {
     confidence: "medium",
     answers: [
-      { questionNumber: 1, selectedLabel: "A", confidence: "high" },
+      { questionNumber: 1, selectedLabel: "a", confidence: "high" },
       { questionNumber: 2, selectedLabel: null, confidence: "low" },
-      { questionNumber: 3, selectedLabel: "C", confidence: "medium" },
-      { questionNumber: 4, selectedLabel: "D", confidence: "medium" },
+      { questionNumber: 3, selectedLabel: "c", confidence: "medium" },
+      { questionNumber: 4, selectedLabel: "d", confidence: "medium" },
     ],
   },
 });
@@ -46,7 +46,7 @@ const lowConfidence = decideProcessedSubmissionStatus({
     confidence: "low",
     answers: questionNumbers.map((questionNumber) => ({
       questionNumber,
-      selectedLabel: "A",
+      selectedLabel: "a",
       confidence: "high" as const,
     })),
   },

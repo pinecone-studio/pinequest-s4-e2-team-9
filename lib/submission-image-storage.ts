@@ -1,6 +1,7 @@
 import "server-only";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { createSupabaseAdminClient, getStorageBucketName } from "@/lib/supabase/admin";
 
 const publicRoot = path.join(process.cwd(), "public");
 const uploadRoot = path.join(publicRoot, "uploads", "submissions");
@@ -22,23 +23,60 @@ export async function saveSubmissionImageFile({
   clientSubmissionKey: string;
 }) {
   const extension = getImageExtension(file.type, file.name);
-  const relativePath = `/uploads/submissions/${safeSegment(examId)}/${safeSegment(
+  const storagePath = `submissions/${safeSegment(examId)}/${safeSegment(
     clientSubmissionKey
   )}.${extension}`;
-  const absolutePath = path.join(publicRoot, relativePath);
+  const bucket = getStorageBucketName();
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase.storage.from(bucket).upload(
+    storagePath,
+    Buffer.from(await file.arrayBuffer()),
+    {
+      contentType: file.type || getMimeType(storagePath),
+      upsert: true,
+    }
+  );
 
-  // ponytail: demo-local storage; move this helper to object storage when uploads must survive deploys.
-  await mkdir(path.dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
+  if (error) {
+    throw new Error(`Supabase submission image upload failed: ${error.message}`);
+  }
 
-  return relativePath;
+  return supabase.storage.from(bucket).getPublicUrl(storagePath).data.publicUrl;
 }
 
 export async function readSubmissionImageFile(imageUrl: string | null) {
-  if (!imageUrl?.startsWith("/uploads/submissions/")) {
-    throw new Error("Submission image is not stored locally.");
+  const value = imageUrl?.trim();
+
+  if (!value) {
+    throw new Error("Submission image is missing.");
   }
 
+  if (/^https?:\/\//i.test(value)) {
+    return readRemoteSubmissionImageFile(value);
+  }
+
+  if (value.startsWith("/uploads/submissions/")) {
+    return readLocalSubmissionImageFile(value);
+  }
+
+  throw new Error("Submission image storage path is not supported.");
+}
+
+async function readRemoteSubmissionImageFile(imageUrl: string) {
+  const response = await fetch(imageUrl, { cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error(`Submission image download failed: ${response.status}`);
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const name = getFileName(imageUrl) ?? "answer-sheet.jpg";
+  const type = response.headers.get("content-type")?.split(";")[0]?.trim() || getMimeType(name);
+
+  return new File([bytes], name, { type });
+}
+
+async function readLocalSubmissionImageFile(imageUrl: string) {
   const absolutePath = path.resolve(publicRoot, imageUrl.slice(1));
   const resolvedUploadRoot = path.resolve(uploadRoot);
 

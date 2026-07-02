@@ -7,6 +7,7 @@ import { Camera, ChevronDown, Images, RefreshCw } from "lucide-react";
 type StudentOption = {
   id: string;
   name: string;
+  registerNumber: string | null;
 };
 
 type QueueStatus =
@@ -58,13 +59,7 @@ export default function PhoneCaptureQueue({
   isAnswerKeyReady: boolean;
 }) {
   const [selectedStudentId, setSelectedStudentId] = useState("");
-  const [selectedStudentIdRefValue, setSelectedStudentIdRefValue] = useState("");
-  const [lastStudentSelection, setLastStudentSelection] = useState("(none)");
-  const [studentSelectionCount, setStudentSelectionCount] = useState(0);
-  const [lastEvent, setLastEvent] = useState("(none)");
   const [isStudentDropdownOpen, setIsStudentDropdownOpen] = useState(false);
-  const [lastDropdownToggleEvent, setLastDropdownToggleEvent] = useState("(none)");
-  const [lastDropdownOptionClick, setLastDropdownOptionClick] = useState("(none)");
   const [items, setItems] = useState<QueueItem[]>([]);
   const [message, setMessage] = useState("");
   const [wakeQueue, setWakeQueue] = useState(0);
@@ -309,17 +304,11 @@ export default function PhoneCaptureQueue({
     log(`[capture-student] source=${source} studentId=${studentId} name=${student?.name ?? ""}`);
 
     selectedStudentIdRef.current = studentId;
-    setSelectedStudentIdRefValue(studentId);
-    setLastStudentSelection(`${source}: ${student?.name ?? "(unknown)"} / ${studentId}`);
-    setStudentSelectionCount((count) => count + 1);
-    setLastEvent(`student ${source}`);
     setSelectedStudentId(studentId);
     setMessage(studentId ? `Сонгосон сурагч: ${student?.name ?? studentId}` : "Сурагч сонгоно уу.");
   }
 
-  function toggleStudentDropdown(source: string) {
-    setLastEvent(source);
-    setLastDropdownToggleEvent(source);
+  function toggleStudentDropdown() {
     setIsStudentDropdownOpen((open) => !open);
   }
 
@@ -333,14 +322,12 @@ export default function PhoneCaptureQueue({
 
   function handleStudentOptionSelect(studentId: string, source: string) {
     selectStudent(studentId, source);
-    setLastDropdownOptionClick(`${source}: ${studentId}`);
     setIsStudentDropdownOpen(false);
   }
 
   function openPicker(source: "camera" | "gallery") {
     const currentSelectedStudentId = selectedStudentIdRef.current || selectedStudentId;
 
-    setLastEvent(`${source} clicked`);
     log(`[capture-picker] source=${source} studentId=${currentSelectedStudentId} ready=${isAnswerKeyReady}`);
 
     if (!isAnswerKeyReady) {
@@ -358,12 +345,7 @@ export default function PhoneCaptureQueue({
     (source === "camera" ? cameraInputRef : galleryInputRef).current?.click();
   }
 
-  const firstStudent = students[0];
   const selectedStudent = students.find((student) => student.id === selectedStudentId);
-  const selectedStudentName = selectedStudent?.name ?? "(none)";
-  const canCapture = isAnswerKeyReady && selectedStudentId.trim().length > 0;
-  const enqueueStudentId = selectedStudentId;
-  const renderedDropdownOptionCount = isStudentDropdownOpen ? students.length : 0;
   const cameraButtonClass =
     "flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-[#8B5E3C] px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-[#734d31]";
   const galleryButtonClass =
@@ -395,18 +377,22 @@ export default function PhoneCaptureQueue({
             onTouchEnd={(event) => {
               event.preventDefault();
               markDropdownTouch();
-              toggleStudentDropdown("student dropdown trigger touch");
+              toggleStudentDropdown();
             }}
             onClick={() => {
               if (shouldSkipSyntheticClick()) {
                 return;
               }
 
-              toggleStudentDropdown("student dropdown trigger click");
+              toggleStudentDropdown();
             }}
             className="flex w-full items-center justify-between gap-3 rounded-lg border border-stone-300 bg-white px-3 py-2 text-left text-sm text-stone-900 shadow-sm focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
           >
-            <span>{selectedStudent ? selectedStudent.name : "Сурагч сонгох"}</span>
+            <span>
+              {selectedStudent
+                ? formatStudentName(selectedStudent)
+                : "Сурагч сонгох"}
+            </span>
             <ChevronDown className="size-4 shrink-0 text-stone-500" aria-hidden="true" />
           </button>
           {isStudentDropdownOpen ? (
@@ -449,7 +435,7 @@ export default function PhoneCaptureQueue({
                         : "text-stone-800 hover:bg-stone-100"
                     }`}
                   >
-                    <span>{student.name}</span>
+                    <span>{formatStudentName(student)}</span>
                     {isSelected ? <span aria-hidden="true">✓</span> : null}
                   </button>
                 );
@@ -457,50 +443,6 @@ export default function PhoneCaptureQueue({
             </div>
           ) : null}
         </div>
-        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 rounded-lg bg-stone-100 p-2 text-xs text-stone-700">
-          <dt>selectedStudentId:</dt>
-          <dd className="break-all font-semibold">{selectedStudentId || "(empty)"}</dd>
-          <dt>selectedStudentIdRef.current:</dt>
-          <dd className="break-all font-semibold">
-            {selectedStudentIdRefValue || "(empty)"}
-          </dd>
-          <dt>selectedStudentName:</dt>
-          <dd className="font-semibold">{selectedStudentName}</dd>
-          <dt>isAnswerKeyReady:</dt>
-          <dd className="font-semibold">{String(isAnswerKeyReady)}</dd>
-          <dt>canCapture:</dt>
-          <dd className="font-semibold">{String(canCapture)}</dd>
-          <dt>students.length:</dt>
-          <dd className="font-semibold">{students.length}</dd>
-          <dt>isStudentDropdownOpen:</dt>
-          <dd className="font-semibold">{String(isStudentDropdownOpen)}</dd>
-          <dt>renderedDropdownOptionCount:</dt>
-          <dd className="font-semibold">{renderedDropdownOptionCount}</dd>
-          <dt>lastDropdownToggleEvent:</dt>
-          <dd className="break-all font-semibold">{lastDropdownToggleEvent}</dd>
-          <dt>lastDropdownOptionClick:</dt>
-          <dd className="break-all font-semibold">{lastDropdownOptionClick}</dd>
-          <dt>enqueueStudentId:</dt>
-          <dd className="break-all font-semibold">{enqueueStudentId || "(empty)"}</dd>
-          <dt>lastStudentSelection:</dt>
-          <dd className="break-all font-semibold">{lastStudentSelection}</dd>
-          <dt>studentSelectionCount:</dt>
-          <dd className="font-semibold">{studentSelectionCount}</dd>
-          <dt>lastEvent:</dt>
-          <dd className="font-semibold">{lastEvent}</dd>
-          <dt>firstStudent.id:</dt>
-          <dd className="break-all font-semibold">
-            {firstStudent ? firstStudent.id : "(none)"}
-          </dd>
-          <dt>firstStudent.name:</dt>
-          <dd className="font-semibold">
-            {firstStudent ? firstStudent.name : "(none)"}
-          </dd>
-          <dt>Object.keys(firstStudent):</dt>
-          <dd className="break-all font-semibold">
-            {firstStudent ? Object.keys(firstStudent).join(", ") : "(none)"}
-          </dd>
-        </dl>
       </div>
 
       <div>
@@ -727,6 +669,12 @@ function formatBytes(bytes: number) {
   }
 
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function formatStudentName(student: StudentOption) {
+  return student.registerNumber
+    ? `${student.name} · ${student.registerNumber}`
+    : student.name;
 }
 
 function randomId() {

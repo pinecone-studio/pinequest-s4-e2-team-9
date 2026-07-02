@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
-import { gradeSubmission } from "@/lib/grading";
+import { gradeSubmission, normalizeAnswerLabel } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
 import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
 import { msSince, perfLog } from "@/lib/perf";
@@ -96,14 +96,14 @@ export async function createSubmissionDraftAction(formData: FormData) {
   const optionLabelsByQuestion = Object.fromEntries(
     exam.questions.map((question) => [
       question.number,
-      question.options.map((option) => option.label),
+      question.options.map((option) => normalizeAnswerLabel(option.label) || option.label),
     ])
   );
   const geminiStartedAt = Date.now();
   const analysis = await analyzeStudentAnswerSheet(
     file,
-    questionNumbers,
-    optionLabelsByQuestion
+    exam.questions,
+    exam.answerKeys
   );
   console.info(`[submission-speed] geminiMs=${Date.now() - geminiStartedAt}`);
 
@@ -119,6 +119,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
     optionLabelsByQuestion,
     answerKeyReady,
   });
+  const finalStatus = grading.needsReview ? submissionStatuses.draft : statusDecision.status;
   console.info(`[submission-speed] gradingMs=${Date.now() - gradingStartedAt}`);
 
   const imageUrl = await saveSubmissionImageFile({
@@ -152,7 +153,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
           },
           data: {
             imageUrl,
-            status: statusDecision.status,
+            status: finalStatus,
             score: grading.totalScore,
             total: grading.maxScore,
             percentage: grading.percentage,
@@ -174,7 +175,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
           examId,
           studentId,
           imageUrl,
-          status: statusDecision.status,
+          status: finalStatus,
           score: grading.totalScore,
           total: grading.maxScore,
           percentage: grading.percentage,
@@ -207,7 +208,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
   }
 
   redirect(
-    statusDecision.status === submissionStatuses.saved
+    !grading.needsReview && statusDecision.status === submissionStatuses.saved
       ? `/exams/${examId}/submissions?saved=1`
       : `/exams/${examId}/submissions/${submission.id}/review`
   );
@@ -330,6 +331,7 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
 function toSubmissionAnswerCreate(row: {
   questionNumber: number;
   selectedLabel: string;
+  selectedStoredAnswer?: string;
   correctLabel: string;
   isCorrect: boolean;
   earnedPoints: number;
@@ -337,7 +339,7 @@ function toSubmissionAnswerCreate(row: {
 }) {
   return {
     question: row.questionNumber,
-    selected: row.selectedLabel,
+    selected: row.selectedStoredAnswer ?? row.selectedLabel,
     correct: row.correctLabel,
     isCorrect: row.isCorrect,
     earnedPoints: row.earnedPoints,

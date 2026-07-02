@@ -34,7 +34,14 @@ export default async function ResultsPage({
       subject: true,
       questionCount: true,
       classroom: {
-        select: { name: true, _count: { select: { students: true } } },
+        select: {
+          name: true,
+          students: {
+            orderBy: { createdAt: "asc" },
+            select: { id: true, registerNumber: true },
+          },
+          _count: { select: { students: true } },
+        },
       },
       questions: { orderBy: { number: "asc" }, select: { id: true, number: true, points: true } },
       submissions: {
@@ -47,7 +54,7 @@ export default async function ResultsPage({
           percentage: true,
           createdAt: true,
           updatedAt: true,
-          student: { select: { name: true } },
+          student: { select: { name: true, registerNumber: true } },
           answers: {
             orderBy: { question: "asc" },
             select: { question: true, selected: true, isCorrect: true },
@@ -83,6 +90,10 @@ export default async function ResultsPage({
   const savedSubmissions = exam.submissions.filter(
     (submission) => submission.status === submissionStatuses.saved
   );
+  const hasSavedSubmissions = savedSubmissions.length > 0;
+  const missingRegisterCount = exam.classroom.students.filter(
+    (student) => !student.registerNumber?.trim()
+  ).length;
   const scoredSubmissions = savedSubmissions.map((submission) => ({
     score: safeNumber(submission.score),
     total: getSubmissionTotal(submission, totalPoints),
@@ -161,13 +172,23 @@ export default async function ResultsPage({
                 <UploadCloud className="size-4" aria-hidden="true" />
                 Хариултын хуудас оруулах
               </Link>
-              <a
-                href={`/exams/${exam.id}/results/export`}
-                className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
-              >
-                <Download className="size-4" aria-hidden="true" />
-                Excel татах
-              </a>
+              {hasSavedSubmissions ? (
+                <a
+                  href={`/exams/${exam.id}/results/export`}
+                  className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  BagshSystem Excel татах
+                </a>
+              ) : (
+                <span
+                  aria-disabled="true"
+                  className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-400"
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  BagshSystem Excel татах
+                </span>
+              )}
               <Link
                 href={`/exams/${exam.id}/answer-key`}
                 className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
@@ -211,6 +232,16 @@ export default async function ResultsPage({
               </dd>
             </div>
           </dl>
+          <div className="mt-4 space-y-2 text-sm">
+            <p className="font-medium text-stone-600">
+              BagshSystem-д оруулахад бэлэн: №, Овог, Нэр, Регистр, Оноо, Хувь, Дүн, Ирц баганатай Excel файл.
+            </p>
+            {hasSavedSubmissions && missingRegisterCount > 0 ? (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800">
+                Зарим сурагчийн регистрийн дугаар дутуу байна. BagshSystem-д оруулахад асуудал үүсэж магадгүй.
+              </p>
+            ) : null}
+          </div>
         </PageHeader>
 
         <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -268,7 +299,12 @@ export default async function ResultsPage({
                     return (
                       <tr key={submission.id} className="hover:bg-stone-50/60">
                         <td className="px-4 py-3 font-semibold text-stone-900">
-                          {submission.student.name}
+                          <span className="block">{submission.student.name}</span>
+                          {submission.student.registerNumber ? (
+                            <span className="mt-1 block text-xs font-medium text-stone-500">
+                              {submission.student.registerNumber}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           {formatNumber(safeNumber(submission.score))} / {formatNumber(total)}

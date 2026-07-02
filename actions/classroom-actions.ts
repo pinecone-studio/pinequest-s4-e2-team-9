@@ -27,7 +27,11 @@ export async function createClassroomAction(formData: FormData) {
 
 export async function createStudentAction(formData: FormData) {
   const user = await requireCurrentUser();
-  const name = String(formData.get("name") || "").trim();
+  const lastName = String(formData.get("lastName") || "").trim();
+  const firstName = String(formData.get("firstName") || "").trim();
+  const fallbackName = String(formData.get("name") || "").trim();
+  const name = [lastName, firstName].filter(Boolean).join(" ") || fallbackName;
+  const registerNumber = String(formData.get("registerNumber") || "").trim();
   const classroomId = String(formData.get("classroomId") || "").trim();
 
   if (!name || !classroomId) {
@@ -46,6 +50,7 @@ export async function createStudentAction(formData: FormData) {
   await prisma.student.create({
     data: {
       name,
+      registerNumber: registerNumber || null,
       classroomId,
     },
   });

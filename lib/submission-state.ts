@@ -18,6 +18,8 @@ type SubmissionAnalysis = {
   answers: Array<{
     questionNumber: number;
     selectedLabel: string | null;
+    rawAnswer?: string | null;
+    normalizedAnswer?: string | null;
     confidence?: Confidence;
   }>;
 };
@@ -164,10 +166,9 @@ function getReviewReason({
 
     seenQuestions.add(answer.questionNumber);
 
-    if (
-      answer.selectedLabel &&
-      !isValidOptionLabel(answer.selectedLabel, optionLabelsByQuestion[answer.questionNumber] ?? [])
-    ) {
+    const optionLabels = optionLabelsByQuestion[answer.questionNumber] ?? [];
+
+    if (answer.selectedLabel && optionLabels.length > 0 && !isValidOptionLabel(answer.selectedLabel, optionLabels)) {
       return "invalid_option";
     }
   }

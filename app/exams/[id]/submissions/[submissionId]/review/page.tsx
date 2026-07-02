@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import SubmissionMaterialReviewLayout from "@/components/exams/submission-material-review-layout";
 import SubmissionReviewForm from "@/components/exams/submission-review-form";
 import PageHeader from "@/components/layout/page-header";
-import { gradeSubmission } from "@/lib/grading";
+import { gradeSubmission, normalizeAnswerLabel } from "@/lib/grading";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { getSubmissionImagePreview } from "@/lib/submission-image-storage";
@@ -50,7 +50,6 @@ export default async function SubmissionReviewPage({
           questions: {
             orderBy: { number: "asc" },
             select: {
-              id: true,
               number: true,
               text: true,
               points: true,
@@ -75,8 +74,15 @@ export default async function SubmissionReviewPage({
     notFound();
   }
 
+  const normalizedQuestions = submission.exam.questions.map((question) => ({
+    ...question,
+    options: question.options.map((option) => ({
+      ...option,
+      label: normalizeAnswerLabel(option.label) || option.label,
+    })),
+  }));
   const grading = gradeSubmission({
-    questions: submission.exam.questions,
+    questions: normalizedQuestions,
     correctAnswers: submission.exam.answerKeys,
     extractedAnswers: submission.answers.map((answer) => ({
       questionNumber: answer.question,
@@ -86,13 +92,18 @@ export default async function SubmissionReviewPage({
   const rowsByQuestion = new Map(
     grading.rows.map((row) => [row.questionNumber, row])
   );
-  const questions = submission.exam.questions.map((question) => {
+  const answerKeyByQuestion = new Map(
+    submission.exam.answerKeys.map((answer) => [answer.question, answer.answer])
+  );
+  const questions = normalizedQuestions.map((question) => {
     const row = rowsByQuestion.get(question.number);
 
     return {
       number: question.number,
       text: question.text,
       points: question.points,
+      answerKey: answerKeyByQuestion.get(question.number) ?? row?.correctLabel ?? "",
+      gradingMode: row?.gradingMode ?? "exact_option",
       selectedLabel: row?.selectedLabel ?? "",
       correctLabel: row?.correctLabel ?? "",
       options: question.options.map((option) => ({
@@ -155,12 +166,6 @@ export default async function SubmissionReviewPage({
               <p className="font-medium text-stone-500">Төлөв</p>
               <p className="mt-1 font-semibold text-stone-900">
                 {getSubmissionStatusText(submission.status)}
-              </p>
-            </div>
-            <div>
-              <p className="font-medium text-stone-500">Хариултын хуудас</p>
-              <p className="mt-1 font-semibold text-stone-900">
-                {submission.imageUrl || "Файл хадгалаагүй"}
               </p>
             </div>
           </div>

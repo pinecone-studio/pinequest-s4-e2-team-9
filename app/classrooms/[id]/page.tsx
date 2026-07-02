@@ -26,7 +26,7 @@ export default async function ClassroomDetailPage({
       name: true,
       students: {
         orderBy: { createdAt: 'asc' },
-        select: { id: true, name: true },
+        select: { id: true, name: true, registerNumber: true },
       },
       exams: {
         where: { ownerUserId: user.id },

@@ -6,6 +6,7 @@ import {
   type ExamMaterialAnalysis,
   type ExamMaterialQuestion,
 } from "@/lib/gemini-vision";
+import { formatMatchingPairs, normalizeAnswerLabel, serializeStoredAnswerKey } from "@/lib/grading";
 import { generateCaptureToken } from "@/lib/capture-token";
 import { saveExamMaterialFile } from "@/lib/exam-material-storage";
 import { SUBJECT_OPTIONS } from "@/lib/subjects";
@@ -13,7 +14,7 @@ import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-const defaultOptionLabels = ["A", "B", "C", "D"];
+const defaultOptionLabels = ["a", "b", "c", "d"];
 
 export async function createExamAction(formData: FormData) {
   const user = await requireCurrentUser();
@@ -74,8 +75,8 @@ export async function createExamAction(formData: FormData) {
       redirect(`/exams/new?classroomId=${encodeURIComponent(classroomId)}&aiError=1`);
     }
 
-    const questions = buildQuestions(analysis);
-    createdQuestionsCount = questions.length;
+    const parsedExam = buildParsedExam(analysis);
+    createdQuestionsCount = parsedExam.questions.length;
     const materialUrl = await saveExamMaterialFile(materialFile);
 
     const exam = await prisma.exam.create({
@@ -85,9 +86,12 @@ export async function createExamAction(formData: FormData) {
         classroomId,
         ownerUserId: user.id,
         captureToken: generateCaptureToken(),
-        questionCount: questions.length,
+        questionCount: parsedExam.questions.length,
         materialUrl,
-        questions: { create: questions },
+        questions: { create: parsedExam.questions },
+        ...(parsedExam.answerKeys.length
+          ? { answerKeys: { create: parsedExam.answerKeys } }
+          : {}),
       },
     });
     examId = exam.id;
@@ -159,12 +163,42 @@ export async function replaceExamMaterialAction(formData: FormData) {
   redirect(`/exams/${examId}/answer-key`);
 }
 
-function buildQuestions(analysis: ExamMaterialAnalysis) {
+function buildParsedExam(analysis: ExamMaterialAnalysis) {
   const usedNumbers = new Set<number>();
+  const answerKeys: Array<{ question: number; answer: string }> = [];
 
-  return analysis.questions.map((question, index) => {
+  const questions = analysis.questions.map((question, index) => {
     const number = getUniqueQuestionNumber(question.number, index, usedNumbers);
-    const options = normalizeOptions(question.options);
+    const options = normalizeOptions(
+      question.options,
+      question.type === "MULTIPLE_CHOICE"
+    );
+    const correctAnswer =
+      question.correctAnswer ||
+      question.options.find((option) => option.isCorrect)?.label ||
+      formatMatchingPairs(question.correctPairs ?? []);
+
+    const hasStructuredAnswer =
+  question.type === "MATCHING" ||
+  question.gradingMode === "matching_pairs" ||
+  Boolean(question.correctPairs?.length) ||
+  Boolean(question.leftItems?.length) ||
+  Boolean(question.rightItems?.length);
+
+if (correctAnswer || hasStructuredAnswer) {
+  answerKeys.push({
+    question: number,
+    answer: serializeStoredAnswerKey({
+      type: question.type,
+      gradingMode: question.gradingMode,
+      correctAnswer,
+      correctPairs: question.correctPairs,
+      acceptedEquivalentAnswers: question.acceptedEquivalentAnswers,
+      leftItems: question.leftItems,
+      rightItems: question.rightItems,
+    }),
+  });
+}
 
     return {
       number,
@@ -173,6 +207,8 @@ function buildQuestions(analysis: ExamMaterialAnalysis) {
       options: { create: options },
     };
   });
+
+  return { questions, answerKeys };
 }
 
 function getUniqueQuestionNumber(number: number, index: number, usedNumbers: Set<number>) {
@@ -195,10 +231,12 @@ function buildBlankQuestions(questionCount: number) {
   }));
 }
 
-function normalizeOptions(options: ExamMaterialQuestion["options"]) {
+function normalizeOptions(options: ExamMaterialQuestion["options"], useDefaults = true) {
   const source = options.length
     ? options
-    : defaultOptionLabels.map((label) => ({ label, text: "", isCorrect: false }));
+    : useDefaults
+      ? defaultOptionLabels.map((label) => ({ label, text: "", isCorrect: false }))
+      : [];
   let hasCorrect = false;
 
   return source.map((option, index) => {
@@ -206,7 +244,7 @@ function normalizeOptions(options: ExamMaterialQuestion["options"]) {
     hasCorrect ||= isCorrect;
 
     return {
-      label: option.label.trim() || defaultOptionLabels[index] || String(index + 1),
+      label: normalizeAnswerLabel(option.label) || option.label.trim() || defaultOptionLabels[index] || String(index + 1),
       text: option.text.trim(),
       isCorrect,
     };

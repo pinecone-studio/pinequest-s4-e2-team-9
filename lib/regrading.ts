@@ -68,7 +68,7 @@ export async function regradeExamSubmissions(examId: string) {
           data: update.grading.rows.map((row) => ({
             submissionId: update.submissionId,
             question: row.questionNumber,
-            selected: row.selectedLabel,
+            selected: row.selectedStoredAnswer,
             correct: row.correctLabel,
             isCorrect: row.isCorrect,
             earnedPoints: row.earnedPoints,
