@@ -1,19 +1,30 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
+import SubmissionMaterialReviewLayout from "@/components/exams/submission-material-review-layout";
 import SubmissionReviewForm from "@/components/exams/submission-review-form";
 import PageHeader from "@/components/layout/page-header";
-import { gradeSubmission } from "@/lib/grading";
+import { expandQuestionsToCount, gradeSubmission } from "@/lib/grading";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import { getSubmissionImagePreview } from "@/lib/submission-image-storage";
+import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
+import { getSubmissionPageDisplayUrl } from "@/lib/upload-storage";
+
+const defaultOptionLabels = ["A", "B", "C", "D"];
 
 export default async function SubmissionReviewPage({
   params,
 }: {
   params: Promise<{ id: string; submissionId: string }>;
 }) {
+  const totalStartedAt = perfNow();
   const { id, submissionId } = await params;
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const submissionStartedAt = perfNow();
   const submission = await prisma.submission.findFirst({
     where: { id: submissionId, examId: id, exam: { ownerUserId: user.id } },
     select: {
@@ -24,6 +35,17 @@ export default async function SubmissionReviewPage({
       score: true,
       total: true,
       percentage: true,
+      pageCount: true,
+      pages: {
+        orderBy: { pageNumber: "asc" },
+        select: {
+          pageNumber: true,
+          fileName: true,
+          mimeType: true,
+          storagePath: true,
+          publicUrl: true,
+        },
+      },
       student: { select: { name: true } },
       answers: {
         orderBy: { question: "asc" },
@@ -34,6 +56,7 @@ export default async function SubmissionReviewPage({
           id: true,
           title: true,
           subject: true,
+          questionCount: true,
           classroom: { select: { name: true } },
           answerKeys: {
             orderBy: { question: "asc" },
@@ -46,6 +69,7 @@ export default async function SubmissionReviewPage({
               number: true,
               text: true,
               points: true,
+              sourcePageNumber: true,
               options: {
                 orderBy: { createdAt: "asc" },
                 select: { label: true, text: true, isCorrect: true },
@@ -56,36 +80,67 @@ export default async function SubmissionReviewPage({
       },
     },
   });
+  const submissionMs = msSince(submissionStartedAt);
 
   if (!submission) {
+    perfLog("review-page", {
+      authMs,
+      submissionMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
 
+  const gradeQuestions = expandQuestionsToCount(
+    submission.exam.questions,
+    submission.exam.questionCount,
+    submission.exam.answerKeys
+  );
   const grading = gradeSubmission({
-    questions: submission.exam.questions,
+    questions: gradeQuestions,
     correctAnswers: submission.exam.answerKeys,
     extractedAnswers: submission.answers.map((answer) => ({
       questionNumber: answer.question,
       selectedLabel: answer.selected,
     })),
+    questionCount: submission.exam.questionCount,
   });
-  const rowsByQuestion = new Map(
-    grading.rows.map((row) => [row.questionNumber, row])
+  const questionsByNumber = new Map(
+    submission.exam.questions.map((question) => [question.number, question])
   );
-  const questions = submission.exam.questions.map((question) => {
-    const row = rowsByQuestion.get(question.number);
+  const questions = grading.rows.map((row) => {
+    const question = questionsByNumber.get(row.questionNumber);
 
     return {
-      number: question.number,
-      text: question.text,
-      points: question.points,
-      selectedLabel: row?.selectedLabel ?? "",
-      correctLabel: row?.correctLabel ?? "",
-      options: question.options.map((option) => ({
-        label: option.label,
-        text: option.text,
-      })),
+      number: row.questionNumber,
+      text: question?.text ?? "",
+      points: row.maxPoints,
+      sourcePageNumber: question?.sourcePageNumber ?? row.sourcePageNumber,
+      selectedLabel: row.selectedLabel,
+      correctLabel: row.correctLabel,
+      options: getReviewOptions(question?.options, row.correctLabel),
     };
+  });
+  const pages = await Promise.all(
+    submission.pages.map(async (page) => ({
+      ...page,
+      publicUrl: await getSubmissionPageDisplayUrl(page.storagePath, page.publicUrl),
+    }))
+  );
+  const firstPage = pages[0];
+  const studentMaterial = firstPage?.publicUrl
+    ? {
+        url: firstPage.publicUrl,
+        name: firstPage.fileName,
+        mimeType: firstPage.mimeType,
+        missingReason: "none" as const,
+      }
+    : await getSubmissionImagePreview(submission.imageUrl, submission.examId);
+  perfLog("review-page", {
+    authMs,
+    submissionMs,
+    questions: questions.length,
+    totalMs: msSince(totalStartedAt),
   });
 
   return (
@@ -130,23 +185,30 @@ export default async function SubmissionReviewPage({
             <div>
               <p className="font-medium text-stone-500">Төлөв</p>
               <p className="mt-1 font-semibold text-stone-900">
-                {submission.status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай"}
+                {getSubmissionStatusText(submission.status)}
               </p>
             </div>
             <div>
               <p className="font-medium text-stone-500">Хариултын хуудас</p>
               <p className="mt-1 font-semibold text-stone-900">
-                {submission.imageUrl || "Файл хадгалаагүй"}
+                {formatPageCount(submission.pageCount)}
               </p>
             </div>
           </div>
         </div>
 
-        <SubmissionReviewForm
-          examId={submission.exam.id}
-          submissionId={submission.id}
-          questions={questions}
-        />
+        <SubmissionMaterialReviewLayout
+          materialUrl={studentMaterial.url}
+          materialName={studentMaterial.name}
+          materialMimeType={studentMaterial.mimeType}
+          materialMissingReason={studentMaterial.missingReason}
+        >
+          <SubmissionReviewForm
+            examId={submission.exam.id}
+            submissionId={submission.id}
+            questions={questions}
+          />
+        </SubmissionMaterialReviewLayout>
       </div>
     </div>
   );
@@ -154,4 +216,28 @@ export default async function SubmissionReviewPage({
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1} хуудас`;
+}
+
+function getReviewOptions(
+  options: Array<{ label: string; text: string }> | undefined,
+  correctLabel: string
+) {
+  if (options?.length) {
+    return options.map((option) => ({
+      label: option.label,
+      text: option.text,
+    }));
+  }
+
+  const labels = new Set(defaultOptionLabels);
+
+  if (correctLabel) {
+    labels.add(correctLabel);
+  }
+
+  return Array.from(labels).map((label) => ({ label, text: "" }));
 }

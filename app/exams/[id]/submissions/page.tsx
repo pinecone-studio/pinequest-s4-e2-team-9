@@ -6,8 +6,17 @@ import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, Smartphone } from
 import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import SubmissionUploadForm from "@/components/exams/submission-upload-form";
 import PageHeader from "@/components/layout/page-header";
+import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { generateCaptureToken } from "@/lib/capture-token";
+import { expandQuestionsToCount } from "@/lib/grading";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import {
+  buildAnswerKeySignatureSeed,
+  getSubmissionStatusText,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionsPage({
@@ -20,41 +29,40 @@ export default async function SubmissionsPage({
     error?: string | string[];
   }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
   const { id } = await params;
   const query = await searchParams;
   const saved = getQueryValue(query.saved) === "1";
   const error = getQueryValue(query.error);
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const examStartedAt = perfNow();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
     select: {
       id: true,
       title: true,
       subject: true,
+      questionCount: true,
       classroomId: true,
       captureToken: true,
+      _count: { select: { answerKeys: true, questions: true } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       classroom: {
         select: {
           name: true,
           students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
         },
       },
-      answerKeys: {
-        orderBy: { question: "asc" },
-        select: { question: true, answer: true },
-      },
       questions: {
         orderBy: { number: "asc" },
-        select: {
-          number: true,
-          points: true,
-          options: {
-            orderBy: { createdAt: "asc" },
-            select: { isCorrect: true },
-          },
-        },
+        select: { number: true, points: true },
       },
       submissions: {
         orderBy: { createdAt: "desc" },
@@ -64,14 +72,22 @@ export default async function SubmissionsPage({
           score: true,
           total: true,
           percentage: true,
+          pageCount: true,
           createdAt: true,
-          student: { select: { name: true } },
+          updatedAt: true,
+          student: { select: { id: true, name: true } },
         },
       },
     },
   });
+  const examMs = msSince(examStartedAt);
 
   if (!exam) {
+    perfLog("submissions-page", {
+      authMs,
+      examMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
 
@@ -84,18 +100,35 @@ export default async function SubmissionsPage({
     });
   }
 
-  const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
-  const isAnswerKeyReady = exam.questions.length > 0 && exam.questions.every(
-    (question) =>
-      question.options.some((option) => option.isCorrect) ||
-      exam.answerKeys.some((answer) => answer.question === question.number)
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
   );
-  const savedCount = exam.submissions.filter((submission) => submission.status === "SAVED").length;
+  const totalPoints = questions.reduce((sum, question) => sum + (question.points ?? 1), 0);
+  const answerKeyReady = isAnswerKeyReady(questions, exam.answerKeys);
+  const signatureSeed = buildAnswerKeySignatureSeed({
+    questions,
+    answerKeys: exam.answerKeys,
+  });
+  const submissionSummary = summarizeSubmissions(exam.submissions, signatureSeed);
+  const savedCount = submissionSummary.completed;
   const captureLink = getCaptureLink(exam.id, captureToken);
+  perfLog("submissions-page", {
+    authMs,
+    examMs,
+    students: exam.classroom.students.length,
+    submissions: exam.submissions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
-      <SubmissionsRealtimeRefresh examId={exam.id} />
+      <SubmissionsRealtimeRefresh
+        examId={exam.id}
+        initialSignature={submissionSummary.signature}
+        hasActiveSubmissions={submissionSummary.active > 0}
+      />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -129,7 +162,7 @@ export default async function SubmissionsPage({
             <span>·</span>
             <span>{exam.subject}</span>
             <span>·</span>
-            <span>{exam.questions.length} асуулт</span>
+            <span>{questions.length} асуулт</span>
             <span>·</span>
             <span>{formatNumber(totalPoints)} оноо</span>
           </div>
@@ -147,12 +180,12 @@ export default async function SubmissionsPage({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">
-                {isAnswerKeyReady
+                {answerKeyReady
                   ? "Зөв хариулт баталгаажсан"
                   : "Зөв хариулт бүрэн баталгаажаагүй байна"}
               </h2>
               <p className="mt-1 text-sm text-stone-500">
-                {isAnswerKeyReady
+                {answerKeyReady
                   ? "Сурагчийн хариултыг уншуулж дүн бодоход бэлэн."
                   : "Эхлээд асуулт бүрийн зөв хариултыг баталгаажуулна уу."}
               </p>
@@ -242,7 +275,7 @@ export default async function SubmissionsPage({
               <SubmissionUploadForm
                 examId={exam.id}
                 students={exam.classroom.students}
-                isAnswerKeyReady={isAnswerKeyReady}
+                isAnswerKeyReady={answerKeyReady}
               />
             )}
           </section>
@@ -266,6 +299,7 @@ export default async function SubmissionsPage({
                     <tr>
                       <th className="px-4 py-3">Сурагч</th>
                       <th className="px-4 py-3">Оноо</th>
+                      <th className="px-4 py-3">Хуудас</th>
                       <th className="px-4 py-3">Хувь</th>
                       <th className="px-4 py-3">Төлөв</th>
                       <th className="px-4 py-3">Огноо</th>
@@ -281,10 +315,11 @@ export default async function SubmissionsPage({
                         <td className="px-4 py-3">
                           {formatNumber(submission.score)} / {formatNumber(submission.total)}
                         </td>
+                        <td className="px-4 py-3">{formatPageCount(submission.pageCount)}</td>
                         <td className="px-4 py-3">{Math.round(submission.percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
-                            {getStatusText(submission.status)}
+                            {getSubmissionStatusText(submission.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3">{submission.createdAt.toLocaleDateString("mn-MN")}</td>
@@ -293,7 +328,7 @@ export default async function SubmissionsPage({
                             href={`/exams/${exam.id}/submissions/${submission.id}/review`}
                             className="text-sm font-medium text-[#8B5E3C] hover:text-[#734d31]"
                           >
-                            {submission.status === "SAVED" ? "Харах" : "Засах"}
+                            {submission.status === submissionStatuses.saved ? "Харах" : "Засах"}
                           </Link>
                         </td>
                       </tr>
@@ -349,16 +384,26 @@ function getCaptureLink(examId: string, captureToken: string) {
   };
 }
 
-function getStatusText(status: string) {
-  return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
-}
-
 function getStatusClass(status: string) {
-  return status === "SAVED"
-    ? "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800"
-    : "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
+  if (status === submissionStatuses.saved) {
+    return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
+  }
+
+  if (status === submissionStatuses.processing) {
+    return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
+  }
+
+  if (status === submissionStatuses.failed) {
+    return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
+  }
+
+  return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
 }
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1} хуудас`;
 }

@@ -17,6 +17,7 @@ type QuestionState = {
   number: number;
   text: string;
   points: number;
+  sourcePageNumber?: number | null;
   options: OptionState[];
 };
 
@@ -347,6 +348,11 @@ export default function AnswerKeyReviewForm({
                     <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-[#8B5E3C]">
                       {question.points} оноо
                     </span>
+                    {question.sourcePageNumber ? (
+                      <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700">
+                        Хуудас {question.sourcePageNumber}
+                      </span>
+                    ) : null}
                   </div>
                   {!isEditing ? (
                     <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-800">

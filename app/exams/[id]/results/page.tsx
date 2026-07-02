@@ -4,7 +4,15 @@ import { connection } from "next/server";
 import { ArrowLeft, Download, Inbox, ListChecks, UploadCloud } from "lucide-react";
 import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import PageHeader from "@/components/layout/page-header";
+import { expandQuestionsToCount } from "@/lib/grading";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import {
+  buildAnswerKeySignatureSeed,
+  getSubmissionStatusText,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function ResultsPage({
@@ -12,47 +20,84 @@ export default async function ResultsPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
   const { id } = await params;
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const resultsStartedAt = perfNow();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
-    include: {
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      questionCount: true,
       classroom: {
-        include: {
-          students: {
-            orderBy: { createdAt: "asc" },
-            select: { id: true, name: true },
-          },
-        },
+        select: { name: true, _count: { select: { students: true } } },
       },
-      answerKeys: { orderBy: { question: "asc" } },
-      questions: {
-        orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
       },
+      questions: { orderBy: { number: "asc" }, select: { id: true, number: true, points: true } },
       submissions: {
         orderBy: { updatedAt: "desc" },
-        include: {
+        select: {
+          id: true,
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          pageCount: true,
+          createdAt: true,
+          updatedAt: true,
           student: { select: { name: true } },
-          answers: { orderBy: { question: "asc" } },
+          answers: {
+            orderBy: { question: "asc" },
+            select: { question: true, selected: true, isCorrect: true },
+          },
         },
       },
     },
   });
+  const resultsMs = msSince(resultsStartedAt);
 
   if (!exam) {
+    perfLog("results-page", {
+      authMs,
+      resultsMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
+  perfLog("results-page", {
+    authMs,
+    resultsMs,
+    submissions: exam.submissions.length,
+    questions: exam.questions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
-  const questionCount = exam.questions.length || exam.questionCount;
-  const totalPoints = exam.questions.reduce(
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const questionCount = questions.length;
+  const totalPoints = questions.reduce(
     (sum, question) => sum + safeNumber(question.points),
     0
   );
+  const signatureSeed = buildAnswerKeySignatureSeed({
+    questions,
+    answerKeys: exam.answerKeys,
+  });
+  const submissionSummary = summarizeSubmissions(exam.submissions, signatureSeed);
   const savedSubmissions = exam.submissions.filter(
-    (submission) => submission.status === "SAVED"
+    (submission) => submission.status === submissionStatuses.saved
   );
   const scoredSubmissions = savedSubmissions.map((submission) => ({
     score: safeNumber(submission.score),
@@ -88,7 +133,7 @@ export default async function ResultsPage({
   );
 
   const summaryCards = [
-    { label: "Сурагчийн тоо", value: String(exam.classroom.students.length) },
+    { label: "Сурагчийн тоо", value: String(exam.classroom._count.students) },
     { label: "Дүн орсон", value: String(savedSubmissions.length) },
     {
       label: "Дундаж оноо",
@@ -113,7 +158,11 @@ export default async function ResultsPage({
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
-      <SubmissionsRealtimeRefresh examId={exam.id} />
+      <SubmissionsRealtimeRefresh
+        examId={exam.id}
+        initialSignature={submissionSummary.signature}
+        hasActiveSubmissions={submissionSummary.active > 0}
+      />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -221,6 +270,7 @@ export default async function ResultsPage({
                   <tr>
                     <th className="px-4 py-3">Сурагч</th>
                     <th className="px-4 py-3">Оноо</th>
+                    <th className="px-4 py-3">Хуудас</th>
                     <th className="px-4 py-3">Хувь</th>
                     <th className="px-4 py-3">Төлөв</th>
                     <th className="px-4 py-3">Огноо</th>
@@ -240,10 +290,11 @@ export default async function ResultsPage({
                         <td className="px-4 py-3">
                           {formatNumber(safeNumber(submission.score))} / {formatNumber(total)}
                         </td>
+                        <td className="px-4 py-3">{formatPageCount(submission.pageCount)}</td>
                         <td className="px-4 py-3">{Math.round(percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
-                            {getStatusText(submission.status)}
+                            {getSubmissionStatusText(submission.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -269,7 +320,7 @@ export default async function ResultsPage({
         <section className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-bold text-stone-900">Даалгаврын гүйцэтгэл</h2>
 
-          {exam.questions.length === 0 ? (
+          {questions.length === 0 ? (
             <div className="mt-5 rounded-lg border border-dashed border-stone-200 bg-stone-50/60 p-8 text-center">
               <Inbox className="mx-auto mb-3 size-8 text-[#8B5E3C]" aria-hidden="true" />
               <p className="text-sm text-stone-500">Асуулт бүртгэгдээгүй байна.</p>
@@ -288,7 +339,7 @@ export default async function ResultsPage({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-200">
-                  {exam.questions.map((question) => {
+                  {questions.map((question) => {
                     const answers = savedSubmissions.map((submission) =>
                       submission.answers.find((answer) => answer.question === question.number)
                     );
@@ -301,7 +352,7 @@ export default async function ResultsPage({
                         : Math.round((correct / savedSubmissions.length) * 100);
 
                     return (
-                      <tr key={question.id} className="hover:bg-stone-50/60">
+                      <tr key={question.number} className="hover:bg-stone-50/60">
                         <td className="px-4 py-3 font-semibold text-stone-900">
                           {question.number}-р асуулт
                         </td>
@@ -323,24 +374,20 @@ export default async function ResultsPage({
   );
 }
 
-function getStatusText(status: string | null | undefined) {
-  if (status === "DRAFT") {
-    return "Хянах шаардлагатай";
-  }
-
-  if (status === "SAVED") {
-    return "Хадгалсан";
-  }
-
-  return status || "Тодорхойгүй";
-}
-
 function getStatusClass(status: string | null | undefined) {
-  if (status === "SAVED") {
+  if (status === submissionStatuses.saved) {
     return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
   }
 
-  if (status === "DRAFT") {
+  if (status === submissionStatuses.processing) {
+    return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
+  }
+
+  if (status === submissionStatuses.failed) {
+    return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
+  }
+
+  if (status === submissionStatuses.draft) {
     return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
   }
 
@@ -369,4 +416,8 @@ function safeNumber(value: number | null | undefined) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1} хуудас`;
 }

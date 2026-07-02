@@ -39,47 +39,60 @@ export default function SubmissionUploadForm({
   loadingText?: string;
   captureToken?: string;
 }) {
-  const [original, setOriginal] = useState<FileInfo | null>(null);
-  const [compressed, setCompressed] = useState<FileInfo | null>(null);
+  const [originalFiles, setOriginalFiles] = useState<FileInfo[]>([]);
+  const [compressedFiles, setCompressedFiles] = useState<FileInfo[]>([]);
   const [isCompressing, setIsCompressing] = useState(false);
   const [message, setMessage] = useState("");
   const isMobile = variant === "mobile";
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
-    const file = input.files?.[0] ?? null;
+    const files = Array.from(input.files ?? []);
 
     setMessage("");
-    setCompressed(null);
+    setCompressedFiles([]);
 
-    if (!file) {
-      setOriginal(null);
+    if (files.length === 0) {
+      setOriginalFiles([]);
       return;
     }
 
-    setOriginal(toFileInfo(file));
+    setOriginalFiles(files.map(toFileInfo));
     setIsCompressing(true);
 
     try {
-      const resized = await compressImage(file);
-      const nextFile = resized.size < file.size ? resized : file;
+      const nextFiles = await Promise.all(
+        files.map(async (file) => {
+          if (!file.type.startsWith("image/")) {
+            return file;
+          }
+
+          const resized = await compressImage(file);
+
+          return resized.size < file.size ? resized : file;
+        })
+      );
 
       if (typeof DataTransfer !== "undefined") {
-        const files = new DataTransfer();
-        files.items.add(nextFile);
-        input.files = files.files;
+        const dataTransfer = new DataTransfer();
+
+        for (const file of nextFiles) {
+          dataTransfer.items.add(file);
+        }
+
+        input.files = dataTransfer.files;
       }
 
-      setCompressed(toFileInfo(nextFile));
+      setCompressedFiles(nextFiles.map(toFileInfo));
       setMessage(
-        nextFile.size > warningSizeBytes
-          ? "Зураг 1MB-ээс их байна. Демо хурд удааширч магадгүй."
-          : "Зураг demo-д зориулж багаслаа."
+        nextFiles.some((file) => file.size > warningSizeBytes)
+          ? "Зарим файл 1MB-ээс их байна. Демо хурд удааширч магадгүй."
+          : "Зургууд demo-д зориулж багаслаа."
       );
     } catch (error) {
       console.warn("[submission-speed] imageCompressionFailed", error);
-      setCompressed(toFileInfo(file));
-      setMessage("Зургийг багасгаж чадсангүй. Эх файлыг илгээнэ.");
+      setCompressedFiles(files.map(toFileInfo));
+      setMessage("Зургийг багасгаж чадсангүй. Эх файлуудыг илгээнэ.");
     } finally {
       setIsCompressing(false);
     }
@@ -88,10 +101,10 @@ export default function SubmissionUploadForm({
   return (
     <form action={createSubmissionDraftAction} className="mt-5 space-y-5">
       <input type="hidden" name="examId" value={examId} />
-      <input type="hidden" name="originalImageSize" value={original?.size ?? ""} />
-      <input type="hidden" name="compressedImageSize" value={compressed?.size ?? ""} />
-      <input type="hidden" name="originalMimeType" value={original?.type ?? ""} />
-      <input type="hidden" name="compressedMimeType" value={compressed?.type ?? ""} />
+      <input type="hidden" name="originalImageSize" value={sumSizes(originalFiles) || ""} />
+      <input type="hidden" name="compressedImageSize" value={sumSizes(compressedFiles) || ""} />
+      <input type="hidden" name="originalMimeType" value={originalFiles.map((file) => file.type).join(",")} />
+      <input type="hidden" name="compressedMimeType" value={compressedFiles.map((file) => file.type).join(",")} />
       {captureToken ? <input type="hidden" name="captureToken" value={captureToken} /> : null}
 
       <div>
@@ -115,29 +128,50 @@ export default function SubmissionUploadForm({
       </div>
 
       <div>
-        <label htmlFor="answerSheet" className="mb-1.5 block text-sm font-semibold text-stone-700">
-          Хариултын хуудасны зураг
+        <label htmlFor="answerFiles" className="mb-1.5 block text-sm font-semibold text-stone-700">
+          Хариултын хуудасны зургууд
         </label>
         <input
-          id="answerSheet"
-          name="answerSheet"
+          id="answerFiles"
+          name="answerFiles"
           required
           type="file"
-          accept={isMobile ? "image/*" : "image/png,image/jpeg,image/jpg,image/webp"}
+          multiple
+          accept="image/jpeg,image/png,image/webp,application/pdf"
           capture={isMobile ? "environment" : undefined}
           onChange={handleFileChange}
           className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
         />
-        {original ? (
+        <p className="mt-2 text-xs leading-5 text-stone-500">
+          Нэг сурагчийн нэг эсвэл олон хуудас сонгож болно. Олон файл сонговол нэг хариултын материал болж боловсруулагдана.
+        </p>
+        <p className="mt-1 text-xs leading-5 text-stone-500">
+          Олон файл сонгохын тулд Ctrl эсвэл Shift дарж сонгоно уу.
+        </p>
+        {originalFiles.length > 0 ? (
+          <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50/70 p-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-stone-500">
+              Сонгосон хуудсууд
+            </p>
+            <ul className="mt-2 space-y-1 text-xs leading-5 text-stone-700">
+              {originalFiles.map((file, index) => (
+                <li key={`${file.name}-${index}`} className="break-all">
+                  Хуудас {index + 1} — {file.name}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {originalFiles.length > 0 ? (
           <p className="mt-2 text-xs leading-5 text-stone-500">
-            Эх файл: {formatBytes(original.size)}
-            {compressed ? ` · Илгээх файл: ${formatBytes(compressed.size)}` : ""}
+            Эх файл: {formatBytes(sumSizes(originalFiles))}
+            {compressedFiles.length > 0 ? ` · Илгээх файл: ${formatBytes(sumSizes(compressedFiles))}` : ""}
           </p>
         ) : null}
         {message ? (
           <p
             className={`mt-2 text-xs font-medium ${
-              compressed && compressed.size > warningSizeBytes ? "text-amber-700" : "text-stone-500"
+              compressedFiles.some((file) => file.size > warningSizeBytes) ? "text-amber-700" : "text-stone-500"
             }`}
           >
             {message}
@@ -179,6 +213,10 @@ function toFileInfo(file: File): FileInfo {
     size: file.size,
     type: file.type || "unknown",
   };
+}
+
+function sumSizes(files: FileInfo[]) {
+  return files.reduce((sum, file) => sum + file.size, 0);
 }
 
 async function compressImage(file: File) {

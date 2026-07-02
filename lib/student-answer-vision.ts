@@ -10,7 +10,10 @@ export type StudentAnswerSheetAnalysis = {
   answers: Array<{
     questionNumber: number;
     selectedLabel: string | null;
-    confidence?: Confidence;
+    sourcePageNumber?: number | null;
+    confidence?: Confidence | number;
+    needsReview?: boolean;
+    reason?: string | null;
   }>;
 };
 
@@ -27,29 +30,40 @@ export async function analyzeStudentAnswerSheet(
   questionNumbers: number[],
   optionLabelsByQuestion: Record<number, string[]>
 ): Promise<StudentAnswerSheetAnalysis> {
+  return analyzeStudentAnswerPages(
+    [{ file, pageNumber: 1 }],
+    questionNumbers,
+    optionLabelsByQuestion
+  );
+}
+
+export async function analyzeStudentAnswerPages(
+  pages: Array<{ file: File; pageNumber: number }>,
+  questionNumbers: number[],
+  optionLabelsByQuestion: Record<number, string[]>
+): Promise<StudentAnswerSheetAnalysis> {
   const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const files = pages.filter((page) => page.file.size > 0);
 
   console.info("[student-answer-vision] model name", modelName);
   console.info(
-    "[student-answer-vision] material name/type/size",
-    file?.name,
-    file?.type,
-    file?.size
+    "[student-answer-vision] page count",
+    files.length
   );
 
   try {
-    if (!file || file.size === 0) {
+    if (files.length === 0) {
       return { ...emptyAnalysis, notes: "Хариултын хуудасны файл хоосон байна." };
     }
 
-    if (file.type === "application/pdf") {
+    if (files.some((page) => page.file.type === "application/pdf")) {
       return {
         ...emptyAnalysis,
         notes: "PDF хариултын хуудсыг энэ хувилбарт уншихгүй. Зургийн файл оруулна уу.",
       };
     }
 
-    if (!imageTypes.has(file.type)) {
+    if (files.some((page) => !imageTypes.has(page.file.type))) {
       return {
         ...emptyAnalysis,
         notes: "Зөвхөн PNG, JPG, JPEG, WEBP зураг уншина.",
@@ -65,17 +79,26 @@ export async function analyzeStudentAnswerSheet(
       };
     }
 
-    const imagePart: Part = {
-      inlineData: {
-        data: Buffer.from(await file.arrayBuffer()).toString("base64"),
-        mimeType: file.type || "image/jpeg",
-      },
-    };
-    const prompt = `You are reading a student answer sheet image for a Mongolian multiple-choice exam.
+    const imageParts = await Promise.all(
+      files.map(async (page) => [
+        { text: `Page ${page.pageNumber}` } satisfies Part,
+        {
+          inlineData: {
+            data: Buffer.from(await page.file.arrayBuffer()).toString("base64"),
+            mimeType: page.file.type || "image/jpeg",
+          },
+        } satisfies Part,
+      ])
+    );
+    const prompt = `You are reading a student's multi-page answer sheet for a Mongolian multiple-choice exam.
+Pages are provided in order. Extract answers across all pages as one submission.
+Return one JSON object. Do not return separate objects per page.
+The exam is multiple-choice A/B/C/D only for now.
 Extract only the answer selected by the student for each question.
 The student may circle, mark, tick, underline, darken, or otherwise indicate an option.
 Return only JSON. Do not grade. Do not decide correctness. Do not invent answers.
-If not visible, selectedLabel should be null.
+If not visible or unclear, selectedLabel should be null and needsReview true.
+Include sourcePageNumber per answer.
 Use the provided valid option labels for each question. Preserve labels exactly as shown.
 Questions and valid labels: ${JSON.stringify(
       questionNumbers.map((questionNumber) => ({
@@ -83,7 +106,7 @@ Questions and valid labels: ${JSON.stringify(
         optionLabels: optionLabelsByQuestion[questionNumber] ?? [],
       }))
     )}
-Expected JSON: {"confidence":"medium","notes":"string","answers":[{"questionNumber":1,"selectedLabel":"B","confidence":"high"},{"questionNumber":2,"selectedLabel":null,"confidence":"low"}]}`;
+Expected JSON: {"confidence":"medium","notes":"string","answers":[{"questionNumber":1,"selectedLabel":"B","sourcePageNumber":1,"confidence":"high","needsReview":false,"reason":null},{"questionNumber":2,"selectedLabel":null,"sourcePageNumber":1,"confidence":"low","needsReview":true,"reason":"unclear"}]}`;
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: modelName,
@@ -94,9 +117,10 @@ Expected JSON: {"confidence":"medium","notes":"string","answers":[{"questionNumb
       },
     });
     const generateStartedAt = Date.now();
-    const result = await model.generateContent([{ text: prompt }, imagePart], {
-      timeout: 90000,
-    });
+    const result = await model.generateContent(
+      [{ text: prompt }, ...imageParts.flat()],
+      { timeout: 90000 }
+    );
     console.info(`[submission-speed] geminiGenerateMs=${Date.now() - generateStartedAt}`);
     const raw = result.response.text();
 
@@ -133,7 +157,7 @@ function parseAnalysis(
   }
 
   return {
-    confidence: normalizeConfidence(parsed.confidence),
+    confidence: normalizeConfidence(parsed.confidence) ?? "medium",
     notes:
       typeof parsed.notes === "string" && parsed.notes.trim()
         ? parsed.notes.trim()
@@ -180,18 +204,34 @@ function normalizeAnswers(
     const selectedLabel =
       typeof item.selectedLabel === "string"
         ? findOptionLabel(item.selectedLabel, optionLabelsByQuestion[questionNumber] ?? [])
+        : typeof item.selectedAnswer === "string"
+          ? findOptionLabel(item.selectedAnswer, optionLabelsByQuestion[questionNumber] ?? [])
+        : null;
+    const confidence = normalizeConfidence(item.confidence);
+    const numericConfidence =
+      typeof item.confidence === "number" && Number.isFinite(item.confidence)
+        ? item.confidence
+        : null;
+    const sourcePageNumber =
+      typeof item.sourcePageNumber === "number" &&
+      Number.isInteger(item.sourcePageNumber) &&
+      item.sourcePageNumber > 0
+        ? item.sourcePageNumber
         : null;
 
     return {
       questionNumber,
       selectedLabel: selectedLabel || null,
-      confidence: normalizeConfidence(item.confidence),
+      sourcePageNumber,
+      ...(confidence ? { confidence } : numericConfidence !== null ? { confidence: numericConfidence } : {}),
+      ...(typeof item.needsReview === "boolean" ? { needsReview: item.needsReview } : {}),
+      ...(typeof item.reason === "string" ? { reason: item.reason } : {}),
     };
   });
 }
 
-function normalizeConfidence(value: unknown): Confidence {
-  return value === "high" || value === "medium" ? value : "low";
+function normalizeConfidence(value: unknown): Confidence | null {
+  return value === "high" || value === "medium" || value === "low" ? value : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

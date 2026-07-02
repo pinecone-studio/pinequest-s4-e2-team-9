@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, FilePlus2 } from "lucide-react";
 import { createExamAction } from "@/actions/exam-actions";
 import PageHeader from "@/components/layout/page-header";
 import LoadingSubmitButton from "@/components/ui/loading-submit-button";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { SUBJECT_OPTIONS } from "@/lib/subjects";
 import { requireCurrentUser } from "@/lib/supabase/server";
@@ -13,18 +14,28 @@ export default async function NewExamPage({
 }: {
   searchParams: Promise<{ aiError?: string | string[]; classroomId?: string | string[] }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
+  const authStartedAt = perfNow();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
   const { aiError, classroomId } = await searchParams;
   const selectedClassroomId = Array.isArray(classroomId)
     ? classroomId[0]
     : classroomId;
   const shouldShowAiError = (Array.isArray(aiError) ? aiError[0] : aiError) === "1";
+  const classroomsStartedAt = perfNow();
   const classrooms = await prisma.classroom.findMany({
     where: { ownerUserId: user.id },
     orderBy: { createdAt: "desc" },
     select: { id: true, name: true, subject: true },
+  });
+  const classroomsMs = msSince(classroomsStartedAt);
+  perfLog("exam-new-page", {
+    authMs,
+    classroomsMs,
+    totalMs: msSince(totalStartedAt),
   });
 
   if (classrooms.length === 0) {
@@ -146,18 +157,19 @@ export default async function NewExamPage({
           ) : null}
 
           <div>
-            <label htmlFor="material" className="mb-1.5 block text-sm font-semibold text-stone-700">
-              Шалгалтын материал
+            <label htmlFor="materialFiles" className="mb-1.5 block text-sm font-semibold text-stone-700">
+              Шалгалтын материалын хуудсууд
             </label>
             <input
-              id="material"
-              name="material"
+              id="materialFiles"
+              name="materialFiles"
               type="file"
-              accept="image/*,.pdf"
+              multiple
+              accept="image/jpeg,image/png,image/webp,application/pdf"
               className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
             />
             <p className="mt-2 text-xs text-stone-500">
-              Шалгалтын материалаа оруулна уу. AI асуулт, сонголт болон зөв хариуг уншиж дараагийн алхамд багш баталгаажуулна.
+              Нэг эсвэл олон зураг/PDF сонгож болно. Олон файл сонговол нэг шалгалтын материал болж боловсруулагдана.
             </p>
           </div>
 

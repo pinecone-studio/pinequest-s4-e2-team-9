@@ -11,6 +11,7 @@ type ReviewQuestion = {
   number: number;
   text: string;
   points: number;
+  sourcePageNumber?: number | null;
   selectedLabel: string;
   correctLabel: string;
   options: Array<{ label: string; text: string }>;
@@ -92,6 +93,11 @@ export default function SubmissionReviewForm({
                 <tr key={row.number} className="align-top hover:bg-stone-50/60">
                   <td className="px-4 py-3">
                     <p className="font-semibold text-stone-900">{row.number}-р асуулт</p>
+                    {row.sourcePageNumber ? (
+                      <p className="mt-1 text-xs font-semibold text-stone-500">
+                        Хуудас {row.sourcePageNumber}
+                      </p>
+                    ) : null}
                     <p className="mt-1 max-w-xl whitespace-pre-wrap leading-6 text-stone-600">
                       {row.text || "Асуултын текст хоосон байна."}
                     </p>

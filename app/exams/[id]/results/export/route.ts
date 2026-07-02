@@ -1,37 +1,86 @@
 import { prisma } from "@/lib/prisma";
-import { labelsMatch } from "@/lib/grading";
+import { expandQuestionsToCount, labelsMatch } from "@/lib/grading";
+import { msSince, perfLog } from "@/lib/perf";
+import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const totalStartedAt = Date.now();
   const { id } = await params;
+  const authStartedAt = Date.now();
   const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const exportStartedAt = Date.now();
   const exam = await prisma.exam.findFirst({
     where: { id, ownerUserId: user.id },
-    include: {
-      classroom: true,
-      answerKeys: { orderBy: { question: "asc" } },
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      questionCount: true,
+      classroom: { select: { name: true } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       questions: {
         orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+        select: {
+          number: true,
+          points: true,
+          options: {
+            orderBy: { createdAt: "asc" },
+            select: { label: true, isCorrect: true },
+          },
+        },
       },
       submissions: {
         orderBy: { updatedAt: "desc" },
-        include: {
-          student: true,
-          answers: { orderBy: { question: "asc" } },
+        select: {
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          pageCount: true,
+          createdAt: true,
+          updatedAt: true,
+          student: { select: { name: true } },
+          answers: {
+            orderBy: { question: "asc" },
+            select: { question: true, selected: true, correct: true },
+          },
         },
       },
     },
   });
+  const exportMs = msSince(exportStartedAt);
 
   if (!exam) {
+    perfLog("results-export", {
+      authMs,
+      exportMs,
+      totalMs: msSince(totalStartedAt),
+    });
+
     return new Response("Шалгалт олдсонгүй.", { status: 404 });
   }
+  perfLog("results-export", {
+    authMs,
+    exportMs,
+    submissions: exam.submissions.length,
+    questions: exam.questions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
-  const totalPoints = exam.questions.reduce(
+  const questions = expandQuestionsToCount(
+    exam.questions,
+    exam.questionCount,
+    exam.answerKeys
+  );
+  const totalPoints = questions.reduce(
     (sum, question) => sum + safeNumber(question.points),
     0
   );
@@ -46,9 +95,10 @@ export async function GET(
     "Оноо",
     "Нийт оноо",
     "Хувь",
+    "Хуудас",
     "Төлөв",
     "Огноо",
-    ...exam.questions.map((question) => `Асуулт ${question.number}`),
+    ...questions.map((question) => `Асуулт ${question.number}`),
   ];
   const rows = exam.submissions.map((submission) => [
     exam.title,
@@ -58,16 +108,17 @@ export async function GET(
     formatNumber(safeNumber(submission.score)),
     formatNumber(getSubmissionTotal(submission, totalPoints)),
     `${Math.round(getSubmissionPercentage(submission, totalPoints))}%`,
-    getStatusText(submission.status),
+    formatPageCount(submission.pageCount),
+    getSubmissionStatusText(submission.status),
     (submission.updatedAt || submission.createdAt).toLocaleDateString("mn-MN"),
-    ...exam.questions.map((question) => {
+    ...questions.map((question) => {
       const answer = submission.answers.find(
         (item) => item.question === question.number
       );
       const selected = answer?.selected || "-";
       const correct =
         answer?.correct ||
-        question.options.find((option) => option.isCorrect)?.label ||
+        question.options?.find((option) => option.isCorrect)?.label ||
         fallbackAnswers.get(question.number) ||
         "-";
 
@@ -106,18 +157,6 @@ function toCsv(rows: string[][]) {
     .join("\r\n");
 }
 
-function getStatusText(status: string | null | undefined) {
-  if (status === "DRAFT") {
-    return "Хянах шаардлагатай";
-  }
-
-  if (status === "SAVED") {
-    return "Хадгалсан";
-  }
-
-  return status || "Тодорхойгүй";
-}
-
 function getSubmissionTotal(submission: { total: number }, fallbackTotal: number) {
   const total = safeNumber(submission.total);
 
@@ -140,4 +179,8 @@ function safeNumber(value: number | null | undefined) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1}`;
 }
