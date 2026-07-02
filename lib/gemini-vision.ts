@@ -1,13 +1,32 @@
 import "server-only";
 import { GoogleGenerativeAI, type GenerativeModel, type Part } from "@google/generative-ai";
+import {
+  evaluateNumericExpression,
+  labelsMatch,
+  normalizeAnswerLabel,
+  normalizeMultipleChoiceAnswer,
+  normalizeMultipleChoiceOption,
+  parseMatchingPairs,
+  type GradingMode,
+  type KeyTextItem,
+  type MatchingPair,
+  type QuestionType,
+} from "@/lib/grading";
 
 type Confidence = "low" | "medium" | "high";
 
 export type ExamMaterialQuestion = {
   number: number;
+  type: QuestionType;
+  gradingMode: GradingMode;
   text: string;
   points?: number;
+  correctAnswer?: string | null;
   correctLabel?: string | null;
+  acceptedEquivalentAnswers?: string[];
+  leftItems?: KeyTextItem[];
+  rightItems?: KeyTextItem[];
+  correctPairs?: MatchingPair[];
   options: Array<{
     label: string;
     text: string;
@@ -36,18 +55,28 @@ const jsonParseFallback: ExamMaterialAnalysis = {
 };
 
 const examPrompt = `Return compact JSON only. No markdown. No explanation.
-Extract only visible text from the image.
+Extract visible exam text and solve answers when the answer is clear from the exam.
 Keep notes under 120 characters.
 Do not repeat dotted blank lines.
 If question text contains many dots like "................", replace them with "____".
 Never output more than 3 consecutive dots.
 Keep question text compact.
-Do not guess correct answer.
-correctLabel must come only from printed "Зөв хариу X"; otherwise null.
-Preserve option labels exactly.
-Prefer object root with this shape: {"questionCount":number,"confidence":"low"|"medium"|"high","notes":string,"questions":[{"number":number,"text":string,"points":number,"correctLabel":string|null,"options":[{"label":string,"text":string}]}]}`;
+Support these types: MULTIPLE_CHOICE, MATCHING, SHORT_ANSWER, NUMERIC_EXPRESSION.
+Use gradingMode: exact_option, matching_pairs, numeric_equivalence, short_text_manual_review.
+For multiple choice, option label/key and option text must be separate.
+Use Latin English option labels only: a, b, c, d.
+Do not output Cyrillic option labels: а, б, в, г.
+Do not translate Mongolian question text.
+Do not modify formula text such as "a × b", "1/2 a × h", "a²", "2πr".
+For multiple choice, correctLabel and correctAnswer must be only the Latin option key, like "a"; never include "a) 3".
+For multiple choice, correctPairs must be [].
+For matching questions, do not classify them as multiple choice. If the question asks to "харгалзуул", "холбо", "тохирох", or has numbered left items and lettered right items, return type MATCHING and gradingMode matching_pairs. Right item labels and correctPairs right-side labels must use Latin labels a, b, c, d. If the correct pairs are not explicitly printed, infer the correct pairs from the question content using math/domain knowledge when it is safe. Do not leave correctPairs empty when the pairs can be inferred.
+For numeric expressions, compute the expected numeric answer and use gradingMode numeric_equivalence.
+For unknown written text answers, use SHORT_ANSWER and gradingMode short_text_manual_review.
+Preserve option text exactly.
+Prefer object root with this shape: {"questionCount":number,"confidence":"low"|"medium"|"high","notes":string,"questions":[{"number":number,"type":"MULTIPLE_CHOICE","text":string,"points":number,"correctAnswer":"a","correctLabel":"a","gradingMode":"exact_option","options":[{"label":"a","text":"3"},{"label":"b","text":"2"}],"leftItems":[],"rightItems":[],"correctPairs":[]}]}`;
 
-const compactRetryPrompt = `Return the same exam structure as VALID COMPACT JSON only. No markdown. No explanation. If unsure, omit unreadable questions. Keep notes under 120 characters. correctLabel only from printed "Зөв хариу X".`;
+const compactRetryPrompt = `Return the same mixed-question exam structure as VALID COMPACT JSON only. No markdown. No explanation. If unsure, omit unreadable questions. Keep notes under 120 characters.`;
 
 export async function analyzeExamMaterial(
   file: File | null | undefined
@@ -65,28 +94,21 @@ export async function analyzeExamMaterial(
     };
   }
 
-  if (file.type === "application/pdf") {
+  if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
     return {
       ...manualFallback,
-      notes: "PDF файлын автомат уншилтыг дараагийн хувилбарт сайжруулна. Одоогоор асуултын бүтцийг гараар баталгаажуулна.",
+      notes: "Зөвхөн зураг эсвэл PDF файлыг AI уншина. Асуултын бүтцийг гараар баталгаажуулна уу.",
     };
   }
 
-  if (!file.type.startsWith("image/")) {
-    return {
-      ...manualFallback,
-      notes: "Зөвхөн зургийн файлыг AI уншина. Асуултын бүтцийг гараар баталгаажуулна уу.",
-    };
-  }
-
-  const image = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const imagePart: Part = {
+  const material = Buffer.from(await file.arrayBuffer()).toString("base64");
+  const materialPart: Part = {
     inlineData: {
-      data: image,
+      data: material,
       mimeType: file.type || "image/jpeg",
     },
   };
-  const makeParts = (prompt: string): Part[] => [{ text: prompt }, imagePart];
+  const makeParts = (prompt: string): Part[] => [{ text: prompt }, materialPart];
   const genAI = new GoogleGenerativeAI(apiKey);
 
   for (const modelName of getGeminiModels()) {
@@ -278,6 +300,8 @@ function parseQuestion(value: unknown, index: number): ExamMaterialQuestion {
   if (!value || typeof value !== "object") {
     return {
       number: index + 1,
+      type: "MULTIPLE_CHOICE",
+      gradingMode: "exact_option",
       text: "",
       points: 1,
       options: [],
@@ -296,43 +320,190 @@ function parseQuestion(value: unknown, index: number): ExamMaterialQuestion {
     typeof item.number === "number" && Number.isInteger(item.number) && item.number > 0
       ? item.number
       : extractedNumber ?? index + 1;
-  const points =
-    typeof item.points === "number" && Number.isFinite(item.points) && item.points > 0
-      ? item.points
-      : extractPoints(rawText) ?? 1;
-  const correctLabel =
-    typeof item.correctLabel === "string" && item.correctLabel.trim()
-      ? item.correctLabel.trim()
-      : null;
-  const options = Array.isArray(item.options)
+  const rawCorrectAnswer = getCorrectAnswer(item);
+  const rawOptions = Array.isArray(item.options)
     ? item.options.map((option, optionIndex) =>
-        parseOption(option, optionIndex, correctLabel)
+        parseOption(option, optionIndex, rawCorrectAnswer)
       ).filter(isOption)
     : [];
+  const leftItems = parseKeyTextItems(item.leftItems);
+  const rightItems = parseKeyTextItems(item.rightItems, true);
+  const parsedPairs = parsePairsArray(item.correctPairs);
+  let candidatePairs = parsedPairs.length > 0 ? parsedPairs : parseMatchingPairs(rawCorrectAnswer);
 
+  if (candidatePairs.length === 0) {
+    candidatePairs = inferMatchingPairs(rawText, leftItems, rightItems);
+  }
+
+  const type = normalizeQuestionType(item, rawText, rawOptions, leftItems, rightItems, candidatePairs);
+  const correctPairs = type === "MATCHING" ? candidatePairs : [];
+  const gradingMode = normalizeGradingMode(item.gradingMode, type);
+  const correctAnswer = getFinalCorrectAnswer({
+    rawText,
+    type,
+    value: correctPairs.length ? formatPairs(correctPairs) : rawCorrectAnswer,
+    options: rawOptions,
+  });
+  const rawPoints =
+    typeof item.points === "number" && Number.isFinite(item.points) && item.points > 0
+      ? item.points
+      : extractPoints(rawText) ??
+        (type === "MATCHING" ? correctPairs.length || leftItems.length || 1 : 1);
+  const points =
+    type === "MATCHING" && correctPairs.length > 1
+      ? Math.max(rawPoints, correctPairs.length)
+      : rawPoints;
   return {
     number,
+    type,
+    gradingMode,
     text: normalizeVisibleText(rawText.replace(/^\s*\d+[\).:-]?\s*/, "")),
     points,
-    correctLabel,
-    options,
+    correctAnswer,
+    correctLabel: type === "MULTIPLE_CHOICE" ? correctAnswer : null,
+    acceptedEquivalentAnswers: parseStringArray(item.acceptedEquivalentAnswers),
+    leftItems,
+    rightItems,
+    correctPairs,
+    options: type === "MULTIPLE_CHOICE"
+      ? rawOptions.map((option) => ({
+          ...option,
+          isCorrect: labelsMatch(option.label, correctAnswer),
+        }))
+      : [],
   };
 }
+function inferMatchingPairs(
+  rawText: string,
+  leftItems: KeyTextItem[],
+  rightItems: KeyTextItem[]
+): MatchingPair[] {
+  if (!leftItems.length || !rightItems.length) {
+    return [];
+  }
 
+  if (!hasMatchingInstruction(rawText)) {
+    return [];
+  }
+
+  const pairs: MatchingPair[] = [];
+  const usedRightKeys = new Set<string>();
+
+  for (const leftItem of leftItems) {
+    const leftMeaning = inferFormulaMeaning(leftItem.text);
+
+    if (!leftMeaning) {
+      continue;
+    }
+
+    const rightItem = rightItems.find((candidate) => {
+      if (usedRightKeys.has(candidate.key)) {
+        return false;
+      }
+
+      return inferFormulaMeaning(candidate.text) === leftMeaning;
+    });
+
+    if (!rightItem) {
+      continue;
+    }
+
+    pairs.push({
+      left: leftItem.key.trim(),
+      right: normalizeMatchingRightKey(rightItem.key),
+    });
+    usedRightKeys.add(rightItem.key);
+  }
+
+  return pairs.length === leftItems.length ? pairs : [];
+}
+
+function inferFormulaMeaning(text: string) {
+  const value = normalizeFormulaText(text);
+
+  if (
+    value.includes("квадратынталбай") ||
+    value === "a2" ||
+    value === "a^2" ||
+    value === "a**2"
+  ) {
+    return "square_area";
+  }
+
+  if (
+    value.includes("тойргийнурт") ||
+    value.includes("2πr") ||
+    value.includes("2pir") ||
+    value.includes("2pi*r")
+  ) {
+    return "circle_circumference";
+  }
+
+  if (
+    value.includes("тэгшөнцөгтийнталбай") ||
+    value === "axb" ||
+    value === "a*b" ||
+    value === "ab"
+  ) {
+    return "rectangle_area";
+  }
+
+  if (
+    value.includes("гурвалжныталбай") ||
+    value.includes("1/2axh") ||
+    value.includes("1/2*a*h") ||
+    value.includes("0.5axh") ||
+    value.includes("0.5*a*h")
+  ) {
+    return "triangle_area";
+  }
+
+  return null;
+}
+
+function normalizeFormulaText(text: string) {
+  return text
+    .toLowerCase()
+    .replaceAll("²", "2")
+    .replaceAll("×", "x")
+    .replaceAll("*", "*")
+    .replaceAll("½", "1/2")
+    .replace(/\s+/g, "")
+    .replace(/[().,]/g, "");
+}
+
+function normalizeMatchingRightKey(key: string) {
+  const value = key.trim().toLowerCase().replace(/[).:\-\s]/g, "");
+
+  if (value === "6") return "b";
+
+  const label = normalizeAnswerLabel(value);
+
+  if (label) {
+    return label;
+  }
+
+  return key.trim();
+}
 function parseOption(
   value: unknown,
   index: number,
   correctLabel: string | null
 ): ExamMaterialQuestion["options"][number] | null {
   if (Array.isArray(value)) {
-    const label = value[0] == null ? "" : String(value[0]);
-    const text = normalizeVisibleText(value[1] == null ? "" : String(value[1]));
+    const rawLabel = value[0] == null ? "" : String(value[0]);
+    const rawText = normalizeVisibleText(value[1] == null ? "" : String(value[1]));
+    const option = normalizeMultipleChoiceOption({
+      label: rawLabel,
+      text: rawText,
+      index,
+    });
+    const correctKey = normalizeMultipleChoiceAnswer(correctLabel, [option]);
 
-    return label.trim() || text
+    return rawLabel.trim() || rawText
       ? {
-          label: label || String(index + 1),
-          text,
-          isCorrect: labelsMatch(label, correctLabel),
+          ...option,
+          isCorrect: labelsMatch(option.label, correctKey),
         }
       : null;
   }
@@ -343,14 +514,19 @@ function parseOption(
 
   const item = value as Record<string, unknown>;
 
-  const label = item.label == null ? "" : String(item.label);
-  const text = normalizeVisibleText(typeof item.text === "string" ? item.text : "");
+  const rawLabel = getStringValue(item.label, item.key);
+  const rawText = normalizeVisibleText(typeof item.text === "string" ? item.text : "");
+  const option = normalizeMultipleChoiceOption({
+    label: rawLabel,
+    text: rawText,
+    index,
+  });
+  const correctKey = normalizeMultipleChoiceAnswer(correctLabel, [option]);
 
-  return label.trim() || text
+  return rawLabel.trim() || rawText
     ? {
-        label: label || String(index + 1),
-        text,
-        isCorrect: labelsMatch(label, correctLabel),
+        ...option,
+        isCorrect: labelsMatch(option.label, correctKey),
       }
     : null;
 }
@@ -358,6 +534,8 @@ function parseOption(
 function hasVisibleQuestionContent(question: ExamMaterialQuestion) {
   return (
     question.text.trim().length > 0 ||
+    Boolean(question.correctAnswer?.trim()) ||
+    Boolean(question.leftItems?.length || question.rightItems?.length) ||
     question.options.filter(
       (option) => option.label.trim().length > 0 || option.text.trim().length > 0
     ).length >= 2
@@ -392,36 +570,176 @@ function extractPoints(text: string) {
   return Number.isFinite(points) && points > 0 ? points : null;
 }
 
-function labelsMatch(label: string, correctLabel: string | null) {
-  if (!correctLabel) {
-    return false;
-  }
-
-  const left = label.trim();
-  const right = correctLabel.trim();
-
-  return left === right || normalizeComparableLabel(left) === normalizeComparableLabel(right);
+function getCorrectAnswer(item: Record<string, unknown>) {
+  return getStringValue(item.correctAnswer, item.correctLabel, item.answer);
 }
 
-function normalizeComparableLabel(label: string) {
-  const lookalikes: Record<string, string> = {
-    A: "A",
-    А: "A",
-    B: "B",
-    В: "B",
-    C: "C",
-    С: "C",
-    E: "E",
-    Е: "E",
-    H: "H",
-    Н: "H",
-    P: "P",
-    Р: "P",
-    X: "X",
-    Х: "X",
-  };
+function getFinalCorrectAnswer({
+  rawText,
+  type,
+  value,
+  options,
+}: {
+  rawText: string;
+  type: QuestionType;
+  value: string;
+  options: ExamMaterialQuestion["options"];
+}) {
+  if (type === "MULTIPLE_CHOICE") {
+    return normalizeMultipleChoiceAnswer(value, options) || null;
+  }
 
-  return label
-    .toUpperCase()
-    .replace(/[AАBВCСEЕHНPРXХ]/g, (character) => lookalikes[character] ?? character);
+  if (value || type !== "NUMERIC_EXPRESSION") {
+    return value || null;
+  }
+
+  const expression = rawText.split("=")[0]?.trim();
+  const result = evaluateNumericExpression(expression);
+
+  return result === null ? null : String(result);
+}
+
+function normalizeQuestionType(
+  item: Record<string, unknown>,
+  rawText: string,
+  options: ExamMaterialQuestion["options"],
+  leftItems: KeyTextItem[],
+  rightItems: KeyTextItem[],
+  correctPairs: MatchingPair[]
+): QuestionType {
+  const textLooksMatching = hasMatchingInstruction(rawText);
+
+  if (
+    item.gradingMode === "matching_pairs" ||
+    correctPairs.length > 0 ||
+    leftItems.length > 0 ||
+    rightItems.length > 0 ||
+    textLooksMatching
+  ) {
+    return "MATCHING";
+  }
+
+  if (
+    item.type === "MULTIPLE_CHOICE" ||
+    item.type === "MATCHING" ||
+    item.type === "SHORT_ANSWER" ||
+    item.type === "NUMERIC_EXPRESSION"
+  ) {
+    return item.type;
+  }
+
+  if (options.length >= 2) {
+    return "MULTIPLE_CHOICE";
+  }
+
+  if (item.gradingMode === "numeric_equivalence" || (!options.length && /=/.test(rawText))) {
+    return "NUMERIC_EXPRESSION";
+  }
+
+  return "SHORT_ANSWER";
+}
+
+function hasMatchingInstruction(text: string) {
+  const value = text.toLowerCase();
+
+  return (
+    value.includes("харгалзуул") ||
+    value.includes("холбоорой") ||
+    value.includes("холбо") ||
+    value.includes("тохирох") ||
+    value.includes("тааруул")
+  );
+}
+
+function normalizeGradingMode(value: unknown, type: QuestionType): GradingMode {
+  if (
+    value === "exact_option" ||
+    value === "matching_pairs" ||
+    value === "numeric_equivalence" ||
+    value === "short_text_manual_review"
+  ) {
+    return value;
+  }
+
+  if (type === "MATCHING") {
+    return "matching_pairs";
+  }
+
+  if (type === "NUMERIC_EXPRESSION") {
+    return "numeric_equivalence";
+  }
+
+  if (type === "SHORT_ANSWER") {
+    return "short_text_manual_review";
+  }
+
+  return "exact_option";
+}
+
+function parseStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function parseKeyTextItems(value: unknown, normalizeKey = false) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const rawKey = getStringValue(record.key, record.label);
+      const key = normalizeKey ? normalizeMatchingRightKey(rawKey) : rawKey;
+      const text = getStringValue(record.text, record.value);
+
+      return key ? { key, text } : null;
+    })
+    .filter((item): item is KeyTextItem => item !== null);
+}
+
+function parsePairsArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (Array.isArray(item)) {
+        const left = getStringValue(item[0]);
+        const right = getStringValue(item[1]);
+
+        return left && right ? { left, right: normalizeMatchingRightKey(right) } : null;
+      }
+
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const left = getStringValue(record.left, record.key);
+      const right = getStringValue(record.right, record.answer);
+
+      return left && right ? { left, right: normalizeMatchingRightKey(right) } : null;
+    })
+    .filter((item): item is MatchingPair => item !== null);
+}
+
+function formatPairs(pairs: MatchingPair[]) {
+  return pairs.map((pair) => `${pair.left}-${pair.right}`).join(", ");
+}
+
+function getStringValue(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
 }

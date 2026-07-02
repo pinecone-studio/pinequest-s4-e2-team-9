@@ -5,12 +5,14 @@ import Link from "next/link";
 import { Save } from "lucide-react";
 import { saveReviewedSubmissionAction } from "@/actions/submission-actions";
 import LoadingSubmitButton from "@/components/ui/loading-submit-button";
-import { labelsMatch } from "@/lib/grading";
+import { gradeSubmission } from "@/lib/grading";
 
 type ReviewQuestion = {
   number: number;
   text: string;
   points: number;
+  answerKey: string;
+  gradingMode: "exact_option" | "matching_pairs" | "numeric_equivalence" | "short_text_manual_review";
   selectedLabel: string;
   correctLabel: string;
   options: Array<{ label: string; text: string }>;
@@ -31,14 +33,39 @@ export default function SubmissionReviewForm({
     )
   );
   const rows = useMemo(
-    () =>
-      questions.map((question) => {
-        const selectedLabel = selected[question.number] ?? "";
-        const isCorrect = Boolean(selectedLabel) && labelsMatch(selectedLabel, question.correctLabel);
-        const earnedPoints = isCorrect ? question.points : 0;
+    () => {
+      const grading = gradeSubmission({
+        questions: questions.map((question) => ({
+          number: question.number,
+          points: question.points,
+          options: question.options,
+        })),
+        correctAnswers: questions.map((question) => ({
+          questionNumber: question.number,
+          answer: question.answerKey || question.correctLabel,
+        })),
+        extractedAnswers: questions.map((question) => ({
+          questionNumber: question.number,
+          rawAnswer: selected[question.number] ?? "",
+        })),
+      });
+      const byQuestion = new Map(
+        grading.rows.map((row) => [row.questionNumber, row])
+      );
 
-        return { ...question, selectedLabel, isCorrect, earnedPoints };
-      }),
+      return questions.map((question) => {
+        const row = byQuestion.get(question.number);
+
+        return {
+          ...question,
+          selectedLabel: row?.selectedLabel ?? "",
+          correctLabel: row?.correctLabel ?? question.correctLabel,
+          isCorrect: row?.isCorrect ?? false,
+          needsReview: row?.needsReview ?? false,
+          earnedPoints: row?.earnedPoints ?? 0,
+        };
+      });
+    },
     [questions, selected]
   );
   const totalScore = rows.reduce((sum, row) => sum + row.earnedPoints, 0);
@@ -87,6 +114,7 @@ export default function SubmissionReviewForm({
               const hasUnknownSelected =
                 row.selectedLabel &&
                 row.options.every((option) => option.label !== row.selectedLabel);
+              const isOptionQuestion = row.gradingMode === "exact_option";
 
               return (
                 <tr key={row.number} className="align-top hover:bg-stone-50/60">
@@ -97,29 +125,43 @@ export default function SubmissionReviewForm({
                     </p>
                   </td>
                   <td className="px-4 py-3">
-                    <select
-                      value={row.selectedLabel}
-                      onChange={(event) =>
-                        setSelected((current) => ({
-                          ...current,
-                          [row.number]: event.target.value,
-                        }))
-                      }
-                      className="w-full min-w-[150px] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
-                    >
-                      <option value="">Хоосон</option>
-                      {hasUnknownSelected ? (
-                        <option value={row.selectedLabel}>
-                          AI уншсан: {row.selectedLabel}
-                        </option>
-                      ) : null}
-                      {row.options.map((option) => (
-                        <option key={option.label} value={option.label}>
-                          {option.label}
-                          {option.text ? ` · ${option.text}` : ""}
-                        </option>
-                      ))}
-                    </select>
+                    {isOptionQuestion ? (
+                      <select
+                        value={row.selectedLabel}
+                        onChange={(event) =>
+                          setSelected((current) => ({
+                            ...current,
+                            [row.number]: event.target.value,
+                          }))
+                        }
+                        className="w-full min-w-[150px] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+                      >
+                        <option value="">Хоосон</option>
+                        {hasUnknownSelected ? (
+                          <option value={row.selectedLabel}>
+                            AI уншсан: {row.selectedLabel}
+                          </option>
+                        ) : null}
+                        {row.options.map((option) => (
+                          <option key={option.label} value={option.label}>
+                            {option.label}
+                            {option.text ? ` · ${option.text}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <textarea
+                        value={row.selectedLabel}
+                        onChange={(event) =>
+                          setSelected((current) => ({
+                            ...current,
+                            [row.number]: event.target.value,
+                          }))
+                        }
+                        rows={2}
+                        className="w-full min-w-[180px] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+                      />
+                    )}
                   </td>
                   <td className="px-4 py-3 font-semibold text-stone-900">
                     {row.correctLabel || "Тодорхойгүй"}
@@ -128,8 +170,14 @@ export default function SubmissionReviewForm({
                     {formatNumber(row.earnedPoints)} / {formatNumber(row.points)}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={getStatusClass(row.selectedLabel, row.isCorrect)}>
-                      {!row.selectedLabel ? "Хоосон" : row.isCorrect ? "Зөв" : "Буруу"}
+                    <span className={getStatusClass(row.selectedLabel, row.isCorrect, row.needsReview)}>
+                      {!row.selectedLabel
+                        ? "Хоосон"
+                        : row.needsReview
+                          ? "Хянах"
+                          : row.isCorrect
+                            ? "Зөв"
+                            : "Буруу"}
                     </span>
                   </td>
                 </tr>
@@ -158,9 +206,13 @@ export default function SubmissionReviewForm({
   );
 }
 
-function getStatusClass(selectedLabel: string, isCorrect: boolean) {
+function getStatusClass(selectedLabel: string, isCorrect: boolean, needsReview: boolean) {
   if (!selectedLabel) {
     return "inline-flex rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700";
+  }
+
+  if (needsReview) {
+    return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
   }
 
   return isCorrect

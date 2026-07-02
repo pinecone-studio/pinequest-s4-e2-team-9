@@ -1,11 +1,20 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, UploadCloud } from "lucide-react";
-import { createSubmissionDraftAction } from "@/actions/submission-actions";
+import QRCode from "react-qr-code";
+import { AlertCircle, ArrowLeft, BarChart3, Inbox, ListChecks, Smartphone } from "lucide-react";
+import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
+import SubmissionUploadForm from "@/components/exams/submission-upload-form";
 import PageHeader from "@/components/layout/page-header";
-import LoadingSubmitButton from "@/components/ui/loading-submit-button";
+import { generateCaptureToken } from "@/lib/capture-token";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import {
+  getSubmissionStatusText,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function SubmissionsPage({
   params,
@@ -17,49 +26,95 @@ export default async function SubmissionsPage({
     error?: string | string[];
   }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
   const { id } = await params;
   const query = await searchParams;
   const saved = getQueryValue(query.saved) === "1";
   const error = getQueryValue(query.error);
-  const exam = await prisma.exam.findUnique({
-    where: { id },
-    include: {
+  const authStartedAt = perfNow();
+  const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const examStartedAt = perfNow();
+  const exam = await prisma.exam.findFirst({
+    where: { id, ownerUserId: user.id },
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      classroomId: true,
+      captureToken: true,
+      _count: { select: { answerKeys: true, questions: true } },
       classroom: {
-        include: {
-          students: { orderBy: { createdAt: "asc" }, select: { id: true, name: true } },
+        select: {
+          name: true,
+          students: {
+            orderBy: { createdAt: "asc" },
+            select: { id: true, name: true, registerNumber: true },
+          },
         },
       },
-      answerKeys: { orderBy: { question: "asc" } },
       questions: {
         orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+        select: { number: true, points: true },
       },
       submissions: {
         orderBy: { createdAt: "desc" },
-        include: {
-          student: { select: { name: true } },
-          answers: true,
+        select: {
+          id: true,
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          createdAt: true,
+          updatedAt: true,
+          student: { select: { id: true, name: true, registerNumber: true } },
         },
       },
     },
   });
+  const examMs = msSince(examStartedAt);
 
   if (!exam) {
+    perfLog("submissions-page", {
+      authMs,
+      examMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
 
+  const captureToken = exam.captureToken ?? generateCaptureToken();
+
+  if (!exam.captureToken) {
+    await prisma.exam.update({
+      where: { id: exam.id },
+      data: { captureToken },
+    });
+  }
+
   const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
-  const isAnswerKeyReady = exam.questions.length > 0 && exam.questions.every(
-    (question) =>
-      question.options.some((option) => option.isCorrect) ||
-      exam.answerKeys.some((answer) => answer.question === question.number)
-  );
-  const savedCount = exam.submissions.filter((submission) => submission.status === "SAVED").length;
+  const isAnswerKeyReady =
+    exam._count.questions > 0 && exam._count.answerKeys >= exam._count.questions;
+  const submissionSummary = summarizeSubmissions(exam.submissions);
+  const savedCount = submissionSummary.completed;
+  const captureLink = getCaptureLink(exam.id, captureToken);
+  perfLog("submissions-page", {
+    authMs,
+    examMs,
+    students: exam.classroom.students.length,
+    submissions: exam.submissions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
+      <SubmissionsRealtimeRefresh
+        examId={exam.id}
+        initialSignature={submissionSummary.signature}
+        hasActiveSubmissions={submissionSummary.active > 0}
+      />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -131,6 +186,52 @@ export default async function SubmissionsPage({
           </div>
         </div>
 
+        <section className="mb-6 rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Smartphone className="size-5 text-[#8B5E3C]" aria-hidden="true" />
+                <h2 className="text-lg font-bold text-stone-900">Утсаар зураг авах</h2>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                QR кодыг утсаараа уншуулж, сурагчийн хариултын хуудсыг камераар авна.
+              </p>
+              <p className="mt-3 text-xs font-medium uppercase tracking-wide text-stone-500">
+                Mobile capture URL
+              </p>
+              <code className="mt-1 block break-all rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-900">
+                {captureLink.path}
+              </code>
+              <input
+                aria-label="Mobile capture URL"
+                readOnly
+                value={captureLink.href}
+                className="mt-3 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700"
+              />
+              <p className="mt-2 text-xs text-stone-500">
+                Deployed demo дээр QR код public URL руу заана.
+              </p>
+            </div>
+
+            <div className="shrink-0">
+              {captureLink.isAbsolute ? (
+                <div className="rounded-lg border border-stone-200 bg-white p-3">
+                  <QRCode
+                    value={captureLink.href}
+                    size={148}
+                    title="Утасны камераар авах QR код"
+                    className="h-[148px] w-[148px]"
+                  />
+                </div>
+              ) : (
+                <div className="max-w-48 rounded-lg border border-dashed border-stone-300 bg-stone-50 p-4 text-sm leading-6 text-stone-600">
+                  NEXT_PUBLIC_APP_URL тохируулбал QR код энд харагдана.
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
         <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
           <section className="rounded-lg border border-stone-200 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-bold text-stone-900">
@@ -157,49 +258,11 @@ export default async function SubmissionsPage({
                 </Link>
               </div>
             ) : (
-              <form action={createSubmissionDraftAction} className="mt-5 space-y-5">
-                <input type="hidden" name="examId" value={exam.id} />
-                <div>
-                  <label htmlFor="studentId" className="mb-1.5 block text-sm font-semibold text-stone-700">
-                    Сурагч
-                  </label>
-                  <select
-                    id="studentId"
-                    name="studentId"
-                    required
-                    defaultValue=""
-                    className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
-                  >
-                    <option value="">Сурагч сонгох</option>
-                    {exam.classroom.students.map((student) => (
-                      <option key={student.id} value={student.id}>
-                        {student.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="answerSheet" className="mb-1.5 block text-sm font-semibold text-stone-700">
-                    Хариултын хуудасны зураг
-                  </label>
-                  <input
-                    id="answerSheet"
-                    name="answerSheet"
-                    required
-                    type="file"
-                    accept="image/png,image/jpeg,image/jpg,image/webp"
-                    className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 file:mr-4 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-stone-700 hover:file:bg-stone-200"
-                  />
-                </div>
-                <LoadingSubmitButton
-                  disabled={!isAnswerKeyReady}
-                  loadingText="Уншиж байна..."
-                  className="w-full px-5 py-2.5 text-sm font-medium"
-                >
-                  <UploadCloud className="size-4" aria-hidden="true" />
-                  AI-аар уншуулах
-                </LoadingSubmitButton>
-              </form>
+              <SubmissionUploadForm
+                examId={exam.id}
+                students={exam.classroom.students}
+                isAnswerKeyReady={isAnswerKeyReady}
+              />
             )}
           </section>
 
@@ -232,7 +295,12 @@ export default async function SubmissionsPage({
                     {exam.submissions.map((submission) => (
                       <tr key={submission.id} className="hover:bg-stone-50/60">
                         <td className="px-4 py-3 font-semibold text-stone-900">
-                          {submission.student.name}
+                          <span className="block">{submission.student.name}</span>
+                          {submission.student.registerNumber ? (
+                            <span className="mt-1 block text-xs font-medium text-stone-500">
+                              {submission.student.registerNumber}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           {formatNumber(submission.score)} / {formatNumber(submission.total)}
@@ -240,7 +308,7 @@ export default async function SubmissionsPage({
                         <td className="px-4 py-3">{Math.round(submission.percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
-                            {getStatusText(submission.status)}
+                            {getSubmissionStatusText(submission.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3">{submission.createdAt.toLocaleDateString("mn-MN")}</td>
@@ -249,7 +317,7 @@ export default async function SubmissionsPage({
                             href={`/exams/${exam.id}/submissions/${submission.id}/review`}
                             className="text-sm font-medium text-[#8B5E3C] hover:text-[#734d31]"
                           >
-                            {submission.status === "SAVED" ? "Харах" : "Засах"}
+                            {submission.status === submissionStatuses.saved ? "Харах" : "Засах"}
                           </Link>
                         </td>
                       </tr>
@@ -294,14 +362,31 @@ function getQueryValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function getStatusText(status: string) {
-  return status === "SAVED" ? "Хадгалсан" : "Хянах шаардлагатай";
+function getCaptureLink(examId: string, captureToken: string) {
+  const path = `/exams/${examId}/capture?token=${encodeURIComponent(captureToken)}`;
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, "");
+
+  return {
+    path,
+    href: appUrl ? `${appUrl}${path}` : path,
+    isAbsolute: Boolean(appUrl),
+  };
 }
 
 function getStatusClass(status: string) {
-  return status === "SAVED"
-    ? "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800"
-    : "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
+  if (status === submissionStatuses.saved) {
+    return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
+  }
+
+  if (status === submissionStatuses.processing) {
+    return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
+  }
+
+  if (status === submissionStatuses.failed) {
+    return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
+  }
+
+  return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
 }
 
 function formatNumber(value: number) {

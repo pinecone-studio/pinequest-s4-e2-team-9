@@ -4,19 +4,37 @@ import { FilePlus2 } from 'lucide-react';
 import PageHeader from '@/components/layout/page-header';
 import ClassroomCard from '@/components/ui/ClassroomCard';
 import EmptyClassroomState from '@/components/ui/EmptyClassroomState';
+import { msSince, perfLog, perfNow } from '@/lib/perf';
 import { prisma } from '@/lib/prisma';
+import { requireCurrentUser } from '@/lib/supabase/server';
 
 export default async function ClassroomsPage() {
+  const totalStartedAt = perfNow();
   await connection();
 
+  const authStartedAt = perfNow();
+  const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const classroomsStartedAt = perfNow();
   const classrooms = await prisma.classroom.findMany({
-    include: {
-      students: true,
+    where: { ownerUserId: user.id },
+    select: {
+      id: true,
+      name: true,
+      _count: { select: { students: true, exams: true } },
       exams: {
         orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: { title: true },
       },
     },
     orderBy: { createdAt: 'desc' },
+  });
+  const classroomsMs = msSince(classroomsStartedAt);
+  perfLog('classrooms-page', {
+    authMs,
+    classroomsMs,
+    totalMs: msSince(totalStartedAt),
   });
 
   return (
@@ -44,8 +62,8 @@ export default async function ClassroomsPage() {
                 classroom={{
                   id: classroom.id,
                   name: classroom.name,
-                  studentCount: classroom.students.length,
-                  examCount: classroom.exams.length,
+                  studentCount: classroom._count.students,
+                  examCount: classroom._count.exams,
                   lastExam: classroom.exams[0]?.title,
                 }}
               />

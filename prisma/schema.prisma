@@ -8,23 +8,29 @@ datasource db {
 }
 
 model Classroom {
-  id        String    @id @default(cuid())
-  name      String
-  subject   String?
-  students  Student[]
-  exams     Exam[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  name        String
+  subject     String?
+  ownerUserId String?
+  students    Student[]
+  exams       Exam[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([ownerUserId])
 }
 
 model Student {
-  id          String       @id @default(cuid())
-  name        String
-  classroomId String
-  classroom   Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
-  submissions Submission[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id             String       @id @default(cuid())
+  name           String
+  registerNumber String?
+  classroomId    String
+  classroom      Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  submissions    Submission[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([classroomId])
 }
 
 model Exam {
@@ -35,11 +41,16 @@ model Exam {
   classroomId   String
   classroom     Classroom    @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   materialUrl   String?
+  ownerUserId   String?
+  captureToken  String?      @unique
   answerKeys    AnswerKey[]
   questions     ExamQuestion[]
   submissions   Submission[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+
+  @@index([ownerUserId])
+  @@index([classroomId])
 }
 
 model ExamQuestion {
@@ -65,6 +76,8 @@ model ExamOption {
   isCorrect  Boolean      @default(false)
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
+
+  @@index([questionId])
 }
 
 model AnswerKey {
@@ -94,6 +107,8 @@ model Submission {
 
   @@index([examId])
   @@index([studentId])
+  @@index([examId, studentId])
+  @@index([examId, status])
 }
 
 model SubmissionAnswer {
@@ -110,4 +125,5 @@ model SubmissionAnswer {
   updatedAt    DateTime   @updatedAt
 
   @@index([submissionId])
+  @@index([submissionId, question])
 }

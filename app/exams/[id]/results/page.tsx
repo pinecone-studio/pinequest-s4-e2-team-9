@@ -2,55 +2,98 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { ArrowLeft, Download, Inbox, ListChecks, UploadCloud } from "lucide-react";
+import SubmissionsRealtimeRefresh from "@/components/exams/submissions-realtime-refresh";
 import PageHeader from "@/components/layout/page-header";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
+import {
+  getSubmissionStatusText,
+  submissionStatuses,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function ResultsPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
   const { id } = await params;
-  const exam = await prisma.exam.findUnique({
-    where: { id },
-    include: {
+  const authStartedAt = perfNow();
+  const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
+  const resultsStartedAt = perfNow();
+  const exam = await prisma.exam.findFirst({
+    where: { id, ownerUserId: user.id },
+    select: {
+      id: true,
+      title: true,
+      subject: true,
+      questionCount: true,
       classroom: {
-        include: {
+        select: {
+          name: true,
           students: {
             orderBy: { createdAt: "asc" },
-            select: { id: true, name: true },
+            select: { id: true, registerNumber: true },
           },
+          _count: { select: { students: true } },
         },
       },
-      answerKeys: { orderBy: { question: "asc" } },
-      questions: {
-        orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
-      },
+      questions: { orderBy: { number: "asc" }, select: { id: true, number: true, points: true } },
       submissions: {
         orderBy: { updatedAt: "desc" },
-        include: {
-          student: { select: { name: true } },
-          answers: { orderBy: { question: "asc" } },
+        select: {
+          id: true,
+          status: true,
+          score: true,
+          total: true,
+          percentage: true,
+          createdAt: true,
+          updatedAt: true,
+          student: { select: { name: true, registerNumber: true } },
+          answers: {
+            orderBy: { question: "asc" },
+            select: { question: true, selected: true, isCorrect: true },
+          },
         },
       },
     },
   });
+  const resultsMs = msSince(resultsStartedAt);
 
   if (!exam) {
+    perfLog("results-page", {
+      authMs,
+      resultsMs,
+      totalMs: msSince(totalStartedAt),
+    });
     notFound();
   }
+  perfLog("results-page", {
+    authMs,
+    resultsMs,
+    submissions: exam.submissions.length,
+    questions: exam.questions.length,
+    totalMs: msSince(totalStartedAt),
+  });
 
   const questionCount = exam.questions.length || exam.questionCount;
   const totalPoints = exam.questions.reduce(
     (sum, question) => sum + safeNumber(question.points),
     0
   );
+  const submissionSummary = summarizeSubmissions(exam.submissions);
   const savedSubmissions = exam.submissions.filter(
-    (submission) => submission.status === "SAVED"
+    (submission) => submission.status === submissionStatuses.saved
   );
+  const hasSavedSubmissions = savedSubmissions.length > 0;
+  const missingRegisterCount = exam.classroom.students.filter(
+    (student) => !student.registerNumber?.trim()
+  ).length;
   const scoredSubmissions = savedSubmissions.map((submission) => ({
     score: safeNumber(submission.score),
     total: getSubmissionTotal(submission, totalPoints),
@@ -85,7 +128,7 @@ export default async function ResultsPage({
   );
 
   const summaryCards = [
-    { label: "Сурагчийн тоо", value: String(exam.classroom.students.length) },
+    { label: "Сурагчийн тоо", value: String(exam.classroom._count.students) },
     { label: "Дүн орсон", value: String(savedSubmissions.length) },
     {
       label: "Дундаж оноо",
@@ -110,6 +153,11 @@ export default async function ResultsPage({
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
+      <SubmissionsRealtimeRefresh
+        examId={exam.id}
+        initialSignature={submissionSummary.signature}
+        hasActiveSubmissions={submissionSummary.active > 0}
+      />
       <div className="mx-auto max-w-7xl">
         <PageHeader
           eyebrow={exam.title}
@@ -124,13 +172,23 @@ export default async function ResultsPage({
                 <UploadCloud className="size-4" aria-hidden="true" />
                 Хариултын хуудас оруулах
               </Link>
-              <Link
-                href={`/exams/${exam.id}/results/export`}
-                className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
-              >
-                <Download className="size-4" aria-hidden="true" />
-                Excel татах
-              </Link>
+              {hasSavedSubmissions ? (
+                <a
+                  href={`/exams/${exam.id}/results/export`}
+                  className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  BagshSystem Excel татах
+                </a>
+              ) : (
+                <span
+                  aria-disabled="true"
+                  className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-400"
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  BagshSystem Excel татах
+                </span>
+              )}
               <Link
                 href={`/exams/${exam.id}/answer-key`}
                 className="inline-flex items-center gap-2 rounded-lg border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
@@ -174,6 +232,16 @@ export default async function ResultsPage({
               </dd>
             </div>
           </dl>
+          <div className="mt-4 space-y-2 text-sm">
+            <p className="font-medium text-stone-600">
+              BagshSystem-д оруулахад бэлэн: №, Овог, Нэр, Регистр, Оноо, Хувь, Дүн, Ирц баганатай Excel файл.
+            </p>
+            {hasSavedSubmissions && missingRegisterCount > 0 ? (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-800">
+                Зарим сурагчийн регистрийн дугаар дутуу байна. BagshSystem-д оруулахад асуудал үүсэж магадгүй.
+              </p>
+            ) : null}
+          </div>
         </PageHeader>
 
         <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -231,7 +299,12 @@ export default async function ResultsPage({
                     return (
                       <tr key={submission.id} className="hover:bg-stone-50/60">
                         <td className="px-4 py-3 font-semibold text-stone-900">
-                          {submission.student.name}
+                          <span className="block">{submission.student.name}</span>
+                          {submission.student.registerNumber ? (
+                            <span className="mt-1 block text-xs font-medium text-stone-500">
+                              {submission.student.registerNumber}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3">
                           {formatNumber(safeNumber(submission.score))} / {formatNumber(total)}
@@ -239,7 +312,7 @@ export default async function ResultsPage({
                         <td className="px-4 py-3">{Math.round(percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
-                            {getStatusText(submission.status)}
+                            {getSubmissionStatusText(submission.status)}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -319,24 +392,20 @@ export default async function ResultsPage({
   );
 }
 
-function getStatusText(status: string | null | undefined) {
-  if (status === "DRAFT") {
-    return "Хянах шаардлагатай";
-  }
-
-  if (status === "SAVED") {
-    return "Хадгалсан";
-  }
-
-  return status || "Тодорхойгүй";
-}
-
 function getStatusClass(status: string | null | undefined) {
-  if (status === "SAVED") {
+  if (status === submissionStatuses.saved) {
     return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
   }
 
-  if (status === "DRAFT") {
+  if (status === submissionStatuses.processing) {
+    return "inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800";
+  }
+
+  if (status === submissionStatuses.failed) {
+    return "inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800";
+  }
+
+  if (status === submissionStatuses.draft) {
     return "inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800";
   }
 

@@ -1,16 +1,31 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { gradeSubmission } from "@/lib/grading";
+import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
+import { gradeSubmission, normalizeAnswerLabel } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
+import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
+import { msSince, perfLog } from "@/lib/perf";
+import {
+  decideProcessedSubmissionStatus,
+  submissionStatuses,
+} from "@/lib/submission-state";
+import { requireCurrentUser } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 const imageTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
 export async function createSubmissionDraftAction(formData: FormData) {
+  const actionStartedAt = Date.now();
   const examId = String(formData.get("examId") || "").trim();
   const studentId = String(formData.get("studentId") || "").trim();
+  const originalImageSize = getPositiveNumber(formData.get("originalImageSize"));
+  const compressedImageSize = getPositiveNumber(formData.get("compressedImageSize"));
+  const originalMimeType = String(formData.get("originalMimeType") || "").trim();
+  const compressedMimeType = String(formData.get("compressedMimeType") || "").trim();
+  const captureToken = String(formData.get("captureToken") || "").trim();
   const answerSheet = formData.get("answerSheet");
   const file =
     typeof File !== "undefined" && answerSheet instanceof File && answerSheet.size > 0
@@ -21,81 +36,146 @@ export async function createSubmissionDraftAction(formData: FormData) {
     redirect("/dashboard");
   }
 
+  const user = captureToken ? null : await requireCurrentUser();
+  const returnPath = captureToken
+    ? `/exams/${examId}/capture?token=${encodeURIComponent(captureToken)}`
+    : `/exams/${examId}/submissions`;
+  const returnQuery = captureToken ? "&" : "?";
+
   if (!studentId) {
-    redirect(`/exams/${examId}/submissions?error=student`);
+    redirect(`${returnPath}${returnQuery}error=student`);
   }
 
   if (!file || !imageTypes.has(file.type)) {
-    redirect(`/exams/${examId}/submissions?error=file`);
+    redirect(`${returnPath}${returnQuery}error=file`);
   }
 
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
-    include: {
-      classroom: { include: { students: { select: { id: true } } } },
-      answerKeys: { orderBy: { question: "asc" } },
+  console.info(
+    `[submission-speed] upload name=${file.name} mime=${file.type} sizeBytes=${file.size} originalSizeBytes=${originalImageSize ?? "unknown"} compressedSizeBytes=${compressedImageSize ?? "unknown"} originalMime=${originalMimeType || "unknown"} compressedMime=${compressedMimeType || "unknown"}`
+  );
+
+  const exam = await prisma.exam.findFirst({
+    where: captureToken
+      ? { id: examId, captureToken }
+      : { id: examId, ownerUserId: user?.id },
+    select: {
+      classroom: { select: { students: { select: { id: true } } } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       questions: {
         orderBy: { number: "asc" },
-        include: { options: { orderBy: { createdAt: "asc" } } },
+        select: {
+          number: true,
+          points: true,
+          options: {
+            orderBy: { createdAt: "asc" },
+            select: { label: true, isCorrect: true },
+          },
+        },
       },
     },
   });
 
   if (!exam) {
-    redirect("/dashboard");
+    redirect(captureToken ? `/exams/${examId}/capture` : "/dashboard");
   }
 
   if (!exam.classroom.students.some((student) => student.id === studentId)) {
-    redirect(`/exams/${examId}/submissions?error=student`);
+    redirect(`${returnPath}${returnQuery}error=student`);
   }
 
-  if (!isAnswerKeyReady(exam.questions, exam.answerKeys)) {
-    redirect(`/exams/${examId}/submissions?error=answerKey`);
+  const answerKeyReady = isAnswerKeyReady(exam.questions, exam.answerKeys);
+
+  if (!answerKeyReady) {
+    redirect(`${returnPath}${returnQuery}error=answerKey`);
   }
 
   const questionNumbers = exam.questions.map((question) => question.number);
   const optionLabelsByQuestion = Object.fromEntries(
     exam.questions.map((question) => [
       question.number,
-      question.options.map((option) => option.label),
+      question.options.map((option) => normalizeAnswerLabel(option.label) || option.label),
     ])
   );
+  const geminiStartedAt = Date.now();
   const analysis = await analyzeStudentAnswerSheet(
     file,
-    questionNumbers,
-    optionLabelsByQuestion
+    exam.questions,
+    exam.answerKeys
   );
+  console.info(`[submission-speed] geminiMs=${Date.now() - geminiStartedAt}`);
+
+  const gradingStartedAt = Date.now();
   const grading = gradeSubmission({
     questions: exam.questions,
     correctAnswers: exam.answerKeys,
     extractedAnswers: analysis.answers,
   });
-const submission = await prisma.$transaction(
-  async (tx) => {
-    const existingSubmission = await tx.submission.findFirst({
-      where: {
-        examId,
-        studentId,
-      },
-      select: {
-        id: true,
-      },
-    });
+  const statusDecision = decideProcessedSubmissionStatus({
+    analysis,
+    questionNumbers,
+    optionLabelsByQuestion,
+    answerKeyReady,
+  });
+  const finalStatus = grading.needsReview ? submissionStatuses.draft : statusDecision.status;
+  console.info(`[submission-speed] gradingMs=${Date.now() - gradingStartedAt}`);
 
-    if (existingSubmission) {
-      await tx.submissionAnswer.deleteMany({
+  const imageUrl = await saveSubmissionImageFile({
+    file,
+    examId,
+    clientSubmissionKey: randomUUID(),
+  });
+  const dbStartedAt = Date.now();
+  const submission = await prisma.$transaction(
+    async (tx) => {
+      const existingSubmission = await tx.submission.findFirst({
         where: {
-          submissionId: existingSubmission.id,
+          examId,
+          studentId,
+        },
+        select: {
+          id: true,
         },
       });
 
-      const updatedSubmission = await tx.submission.update({
-        where: {
-          id: existingSubmission.id,
-        },
+      if (existingSubmission) {
+        await tx.submissionAnswer.deleteMany({
+          where: {
+            submissionId: existingSubmission.id,
+          },
+        });
+
+        const updatedSubmission = await tx.submission.update({
+          where: {
+            id: existingSubmission.id,
+          },
+          data: {
+            imageUrl,
+            status: finalStatus,
+            score: grading.totalScore,
+            total: grading.maxScore,
+            percentage: grading.percentage,
+          },
+        });
+
+        await tx.submissionAnswer.createMany({
+          data: grading.rows.map((row) => ({
+            ...toSubmissionAnswerCreate(row),
+            submissionId: updatedSubmission.id,
+          })),
+        });
+
+        return updatedSubmission;
+      }
+
+      const createdSubmission = await tx.submission.create({
         data: {
-          imageUrl: file.name,
-          status: "DRAFT",
+          examId,
+          studentId,
+          imageUrl,
+          status: finalStatus,
           score: grading.totalScore,
           total: grading.maxScore,
           percentage: grading.percentage,
@@ -105,46 +185,40 @@ const submission = await prisma.$transaction(
       await tx.submissionAnswer.createMany({
         data: grading.rows.map((row) => ({
           ...toSubmissionAnswerCreate(row),
-          submissionId: updatedSubmission.id,
+          submissionId: createdSubmission.id,
         })),
       });
 
-      return updatedSubmission;
-    }
-
-    const createdSubmission = await tx.submission.create({
-      data: {
-        examId,
-        studentId,
-        imageUrl: file.name,
-        status: "DRAFT",
-        score: grading.totalScore,
-        total: grading.maxScore,
-        percentage: grading.percentage,
-      },
-    });
-
-    await tx.submissionAnswer.createMany({
-      data: grading.rows.map((row) => ({
-        ...toSubmissionAnswerCreate(row),
-        submissionId: createdSubmission.id,
-      })),
-    });
-
-    return createdSubmission;
-  },
-  { timeout: 30000 }
-);
+      return createdSubmission;
+    },
+    { timeout: 30000 }
+  );
+  console.info(`[submission-speed] dbSaveMs=${Date.now() - dbStartedAt}`);
 
   console.info("[createSubmissionDraftAction] AI confidence", analysis.confidence);
   console.info("[createSubmissionDraftAction] AI notes", analysis.notes);
   console.info("[createSubmissionDraftAction] answers length", analysis.answers.length);
+  console.info("[createSubmissionDraftAction] status decision", statusDecision);
 
   revalidatePath(`/exams/${examId}/submissions`);
-  redirect(`/exams/${examId}/submissions/${submission.id}/review`);
+  revalidatePath(`/exams/${examId}/results`);
+  console.info(`[submission-speed] fullSubmissionMs=${Date.now() - actionStartedAt}`);
+  if (captureToken) {
+    redirect(`${returnPath}&submitted=1&submissionId=${encodeURIComponent(submission.id)}`);
+  }
+
+  redirect(
+    !grading.needsReview && statusDecision.status === submissionStatuses.saved
+      ? `/exams/${examId}/submissions?saved=1`
+      : `/exams/${examId}/submissions/${submission.id}/review`
+  );
 }
 
 export async function saveReviewedSubmissionAction(formData: FormData) {
+  const actionStartedAt = Date.now();
+  const authStartedAt = Date.now();
+  const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
   const examId = String(formData.get("examId") || "").trim();
   const submissionId = String(formData.get("submissionId") || "").trim();
 
@@ -152,43 +226,73 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
     redirect("/dashboard");
   }
 
-  const submission = await prisma.submission.findUnique({
-    where: { id: submissionId },
-    include: {
+  const loadStartedAt = Date.now();
+  const submission = await prisma.submission.findFirst({
+    where: { id: submissionId, examId, exam: { ownerUserId: user.id } },
+    select: {
+      examId: true,
       exam: {
-        include: {
-          answerKeys: { orderBy: { question: "asc" } },
+        select: {
+          answerKeys: {
+            orderBy: { question: "asc" },
+            select: { question: true, answer: true },
+          },
           questions: {
             orderBy: { number: "asc" },
-            include: { options: { orderBy: { createdAt: "asc" } } },
+            select: {
+              number: true,
+              points: true,
+              options: {
+                orderBy: { createdAt: "asc" },
+                select: { label: true, isCorrect: true },
+              },
+            },
           },
         },
       },
     },
   });
+  const loadMs = msSince(loadStartedAt);
+  console.info(`[review-save-speed] loadSubmissionMs=${loadMs}`);
 
-  if (!submission || submission.examId !== examId) {
+  if (!submission) {
     redirect(`/exams/${examId}/submissions?error=submission`);
   }
 
+  const parseStartedAt = Date.now();
+  const extractedAnswers = submission.exam.questions.map((question) => ({
+    questionNumber: question.number,
+    selectedLabel: String(formData.get(`answer-${question.number}`) || "").trim(),
+  }));
+  const parseMs = msSince(parseStartedAt);
+  console.info(`[review-save-speed] parseFormMs=${parseMs}`);
+
+  const gradingStartedAt = Date.now();
   const grading = gradeSubmission({
     questions: submission.exam.questions,
     correctAnswers: submission.exam.answerKeys,
-    extractedAnswers: submission.exam.questions.map((question) => ({
-      questionNumber: question.number,
-      selectedLabel: String(formData.get(`answer-${question.number}`) || "").trim(),
-    })),
+    extractedAnswers,
   });
+  const gradingMs = msSince(gradingStartedAt);
+  console.info(`[review-save-speed] gradingMs=${gradingMs}`);
 
+  const transactionStartedAt = Date.now();
   await prisma.$transaction(
     async (tx) => {
+      const deleteStartedAt = Date.now();
       await tx.submissionAnswer.deleteMany({ where: { submissionId } });
+      console.info(`[review-save-speed] deleteAnswersMs=${Date.now() - deleteStartedAt}`);
+
+      const createStartedAt = Date.now();
       await tx.submissionAnswer.createMany({
         data: grading.rows.map((row) => ({
           submissionId,
           ...toSubmissionAnswerCreate(row),
         })),
       });
+      console.info(`[review-save-speed] createAnswersMs=${Date.now() - createStartedAt}`);
+
+      const updateStartedAt = Date.now();
       await tx.submission.update({
         where: { id: submissionId },
         data: {
@@ -198,34 +302,36 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
           percentage: grading.percentage,
         },
       });
+      console.info(`[review-save-speed] updateSubmissionMs=${Date.now() - updateStartedAt}`);
     },
     { timeout: 30000 }
   );
+  const transactionMs = msSince(transactionStartedAt);
+  console.info(`[review-save-speed] dbTransactionMs=${transactionMs}`);
 
+  const revalidateStartedAt = Date.now();
   revalidatePath(`/exams/${examId}/submissions`);
   revalidatePath(`/exams/${examId}/submissions/${submissionId}/review`);
+  revalidatePath(`/exams/${examId}/results`);
+  const revalidateMs = msSince(revalidateStartedAt);
+  console.info(`[review-save-speed] revalidateMs=${revalidateMs}`);
+  console.info(`[review-save-speed] totalMs=${msSince(actionStartedAt)}`);
+  perfLog("review-save", {
+    authMs,
+    loadMs,
+    parseMs,
+    gradingMs,
+    transactionMs,
+    revalidateMs,
+    totalMs: msSince(actionStartedAt),
+  });
   redirect(`/exams/${examId}/submissions?saved=1`);
-}
-
-function isAnswerKeyReady(
-  questions: Array<{ number: number; options: Array<{ isCorrect: boolean }> }>,
-  answerKeys: Array<{ question: number; answer: string }>
-) {
-  const fallback = new Map(answerKeys.map((item) => [item.question, item.answer]));
-
-  return (
-    questions.length > 0 &&
-    questions.every(
-      (question) =>
-        question.options.some((option) => option.isCorrect) ||
-        Boolean(fallback.get(question.number))
-    )
-  );
 }
 
 function toSubmissionAnswerCreate(row: {
   questionNumber: number;
   selectedLabel: string;
+  selectedStoredAnswer?: string;
   correctLabel: string;
   isCorrect: boolean;
   earnedPoints: number;
@@ -233,10 +339,16 @@ function toSubmissionAnswerCreate(row: {
 }) {
   return {
     question: row.questionNumber,
-    selected: row.selectedLabel,
+    selected: row.selectedStoredAnswer ?? row.selectedLabel,
     correct: row.correctLabel,
     isCorrect: row.isCorrect,
     earnedPoints: row.earnedPoints,
     maxPoints: row.maxPoints,
   };
+}
+
+function getPositiveNumber(value: FormDataEntryValue | null) {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number > 0 ? number : null;
 }

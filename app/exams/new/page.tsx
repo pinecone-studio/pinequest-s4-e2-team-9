@@ -4,24 +4,38 @@ import { AlertCircle, ArrowLeft, FilePlus2 } from "lucide-react";
 import { createExamAction } from "@/actions/exam-actions";
 import PageHeader from "@/components/layout/page-header";
 import LoadingSubmitButton from "@/components/ui/loading-submit-button";
+import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { SUBJECT_OPTIONS } from "@/lib/subjects";
+import { requireCurrentUser } from "@/lib/supabase/server";
 
 export default async function NewExamPage({
   searchParams,
 }: {
   searchParams: Promise<{ aiError?: string | string[]; classroomId?: string | string[] }>;
 }) {
+  const totalStartedAt = perfNow();
   await connection();
 
+  const authStartedAt = perfNow();
+  const user = await requireCurrentUser();
+  const authMs = msSince(authStartedAt);
   const { aiError, classroomId } = await searchParams;
   const selectedClassroomId = Array.isArray(classroomId)
     ? classroomId[0]
     : classroomId;
   const shouldShowAiError = (Array.isArray(aiError) ? aiError[0] : aiError) === "1";
+  const classroomsStartedAt = perfNow();
   const classrooms = await prisma.classroom.findMany({
+    where: { ownerUserId: user.id },
     orderBy: { createdAt: "desc" },
     select: { id: true, name: true, subject: true },
+  });
+  const classroomsMs = msSince(classroomsStartedAt);
+  perfLog("exam-new-page", {
+    authMs,
+    classroomsMs,
+    totalMs: msSince(totalStartedAt),
   });
 
   if (classrooms.length === 0) {

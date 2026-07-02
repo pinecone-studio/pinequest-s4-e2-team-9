@@ -1,13 +1,26 @@
-'use client';
-
 import React from 'react';
-import { useParams } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import Link from 'next/link';
+import { prisma } from '@/lib/prisma';
+import { requireCurrentUser } from '@/lib/supabase/server';
 
-export default function ExamSetupPage() {
-  const params = useParams();
-  const examId = params.id as string;
-  const isNew = examId.startsWith('exam_');
+export default async function ExamSetupPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id: examId } = await params;
+  const user = await requireCurrentUser();
+  const exam = await prisma.exam.findFirst({
+    where: { id: examId, ownerUserId: user.id },
+    select: { id: true },
+  });
+
+  if (!exam) {
+    notFound();
+  }
+
+  const isNew = false;
 
   const steps = [
     {
@@ -23,7 +36,7 @@ export default function ExamSetupPage() {
     {
       title: 'Шалгалт оруулах',
       description: 'Сурагчдын шалгалтын хуудсыг оруулж, дүнг гарга.',
-      href: `/exams/${examId}/upload`,
+      href: `/exams/${examId}/submissions`,
       icon: (
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />

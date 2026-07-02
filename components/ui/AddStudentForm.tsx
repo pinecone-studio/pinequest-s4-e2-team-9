@@ -11,17 +11,38 @@ export default function AddStudentForm({ classroomId }: AddStudentFormProps) {
     <form action={createStudentAction} className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm max-w-md">
       <h3 className="text-sm font-bold text-stone-900 mb-3">Шинэ сурагч нэмэх</h3>
       <input type="hidden" name="classroomId" value={classroomId} />
-      <div className="flex gap-2">
-        <input
-          type="text"
-          name="name"
-          placeholder="Сурагчийн бүтэн нэр"
-          required
-          className="flex-1 px-3 py-1.5 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#8B5E3C] focus:border-[#8B5E3C] text-stone-900"
-        />
+      <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block text-sm font-semibold text-stone-700">
+            Овог
+            <input
+              type="text"
+              name="lastName"
+              required
+              className="mt-1.5 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+            />
+          </label>
+          <label className="block text-sm font-semibold text-stone-700">
+            Нэр
+            <input
+              type="text"
+              name="firstName"
+              required
+              className="mt-1.5 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+            />
+          </label>
+        </div>
+        <label className="block text-sm font-semibold text-stone-700">
+          Регистрийн дугаар
+          <input
+            type="text"
+            name="registerNumber"
+            className="mt-1.5 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+          />
+        </label>
         <LoadingSubmitButton
           loadingText="Нэмж байна..."
-          className="whitespace-nowrap px-4 py-1.5 text-sm font-medium"
+          className="w-full px-4 py-2 text-sm font-medium"
         >
           <UserPlus className="size-4" aria-hidden="true" />
           Нэмэх
