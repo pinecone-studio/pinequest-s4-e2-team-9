@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { getSubmissionImagePreview } from "@/lib/submission-image-storage";
 import { getSubmissionStatusText } from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
+import { getSubmissionPageDisplayUrl } from "@/lib/upload-storage";
 
 export default async function SubmissionReviewPage({
   params,
@@ -32,6 +33,17 @@ export default async function SubmissionReviewPage({
       score: true,
       total: true,
       percentage: true,
+      pageCount: true,
+      pages: {
+        orderBy: { pageNumber: "asc" },
+        select: {
+          pageNumber: true,
+          fileName: true,
+          mimeType: true,
+          storagePath: true,
+          publicUrl: true,
+        },
+      },
       student: { select: { name: true } },
       answers: {
         orderBy: { question: "asc" },
@@ -54,6 +66,7 @@ export default async function SubmissionReviewPage({
               number: true,
               text: true,
               points: true,
+              sourcePageNumber: true,
               options: {
                 orderBy: { createdAt: "asc" },
                 select: { label: true, text: true, isCorrect: true },
@@ -93,6 +106,7 @@ export default async function SubmissionReviewPage({
       number: question.number,
       text: question.text,
       points: question.points,
+      sourcePageNumber: question.sourcePageNumber,
       selectedLabel: row?.selectedLabel ?? "",
       correctLabel: row?.correctLabel ?? "",
       options: question.options.map((option) => ({
@@ -101,10 +115,21 @@ export default async function SubmissionReviewPage({
       })),
     };
   });
-  const studentMaterial = await getSubmissionImagePreview(
-    submission.imageUrl,
-    submission.examId
+  const pages = await Promise.all(
+    submission.pages.map(async (page) => ({
+      ...page,
+      publicUrl: await getSubmissionPageDisplayUrl(page.storagePath, page.publicUrl),
+    }))
   );
+  const firstPage = pages[0];
+  const studentMaterial = firstPage?.publicUrl
+    ? {
+        url: firstPage.publicUrl,
+        name: firstPage.fileName,
+        mimeType: firstPage.mimeType,
+        missingReason: "none" as const,
+      }
+    : await getSubmissionImagePreview(submission.imageUrl, submission.examId);
   perfLog("review-page", {
     authMs,
     submissionMs,
@@ -160,7 +185,7 @@ export default async function SubmissionReviewPage({
             <div>
               <p className="font-medium text-stone-500">Хариултын хуудас</p>
               <p className="mt-1 font-semibold text-stone-900">
-                {submission.imageUrl || "Файл хадгалаагүй"}
+                {formatPageCount(submission.pageCount)}
               </p>
             </div>
           </div>
@@ -185,4 +210,8 @@ export default async function SubmissionReviewPage({
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1} хуудас`;
 }

@@ -7,6 +7,7 @@ import PageHeader from "@/components/layout/page-header";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import {
+  buildAnswerKeySignatureSeed,
   getSubmissionStatusText,
   submissionStatuses,
   summarizeSubmissions,
@@ -36,6 +37,10 @@ export default async function ResultsPage({
       classroom: {
         select: { name: true, _count: { select: { students: true } } },
       },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       questions: { orderBy: { number: "asc" }, select: { id: true, number: true, points: true } },
       submissions: {
         orderBy: { updatedAt: "desc" },
@@ -45,6 +50,7 @@ export default async function ResultsPage({
           score: true,
           total: true,
           percentage: true,
+          pageCount: true,
           createdAt: true,
           updatedAt: true,
           student: { select: { name: true } },
@@ -79,7 +85,11 @@ export default async function ResultsPage({
     (sum, question) => sum + safeNumber(question.points),
     0
   );
-  const submissionSummary = summarizeSubmissions(exam.submissions);
+  const signatureSeed = buildAnswerKeySignatureSeed({
+    questions: exam.questions,
+    answerKeys: exam.answerKeys,
+  });
+  const submissionSummary = summarizeSubmissions(exam.submissions, signatureSeed);
   const savedSubmissions = exam.submissions.filter(
     (submission) => submission.status === submissionStatuses.saved
   );
@@ -254,6 +264,7 @@ export default async function ResultsPage({
                   <tr>
                     <th className="px-4 py-3">Сурагч</th>
                     <th className="px-4 py-3">Оноо</th>
+                    <th className="px-4 py-3">Хуудас</th>
                     <th className="px-4 py-3">Хувь</th>
                     <th className="px-4 py-3">Төлөв</th>
                     <th className="px-4 py-3">Огноо</th>
@@ -273,6 +284,7 @@ export default async function ResultsPage({
                         <td className="px-4 py-3">
                           {formatNumber(safeNumber(submission.score))} / {formatNumber(total)}
                         </td>
+                        <td className="px-4 py-3">{formatPageCount(submission.pageCount)}</td>
                         <td className="px-4 py-3">{Math.round(percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
@@ -398,4 +410,8 @@ function safeNumber(value: number | null | undefined) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1} хуудас`;
 }

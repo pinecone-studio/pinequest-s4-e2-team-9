@@ -1,10 +1,13 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import {
+  getExamMaterialPageDisplayUrl,
+  getExamMaterialPageFile,
+  uploadExamMaterialPageToStorage,
+} from "@/lib/upload-storage";
 
 const publicRoot = path.join(process.cwd(), "public");
-const uploadRoot = path.join(publicRoot, "uploads", "exam-materials");
 
 export type ExamMaterialPreview = {
   url: string | null;
@@ -13,16 +16,37 @@ export type ExamMaterialPreview = {
   missingReason: "none" | "not-uploaded" | "old-not-persisted";
 };
 
-export async function saveExamMaterialFile(file: File) {
-  const safeName = safeSegment(file.name || "exam-material");
-  const relativePath = `/uploads/exam-materials/${randomUUID()}-${safeName}`;
-  const absolutePath = path.join(publicRoot, relativePath);
+export async function saveExamMaterialFile(file: File, examId: string) {
+  const saved = await saveExamMaterialPageFile({ file, examId, pageNumber: 1 });
 
-  // ponytail: local public storage; move to object storage when uploads must survive deploys.
-  await mkdir(uploadRoot, { recursive: true });
-  await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
+  return saved.publicUrl ?? saved.storagePath;
+}
 
-  return relativePath;
+export async function saveExamMaterialPageFile({
+  file,
+  examId,
+  pageNumber,
+}: {
+  file: File;
+  examId: string;
+  pageNumber: number;
+}) {
+  return uploadExamMaterialPageToStorage({
+    file,
+    examId,
+    pageNumber,
+    fileName: file.name || null,
+    contentType: file.type || null,
+  });
+}
+
+export async function readExamMaterialPageFile(page: {
+  storagePath: string;
+  publicUrl?: string | null;
+  fileName?: string | null;
+  mimeType?: string | null;
+}) {
+  return getExamMaterialPageFile(page);
 }
 
 export async function getExamMaterialPreview(
@@ -48,6 +72,19 @@ export async function getExamMaterialPreview(
     };
   }
 
+  if (value.includes("/pages/page-")) {
+    const url = await getExamMaterialPageDisplayUrl(value);
+
+    if (url) {
+      return {
+        url,
+        name: getFileName(value),
+        mimeType: getMimeType(value),
+        missingReason: "none",
+      };
+    }
+  }
+
   for (const url of [
     `/uploads/exam-materials/${encodeURIComponent(value)}`,
     `/${encodeURIComponent(value)}`,
@@ -69,15 +106,6 @@ export async function getExamMaterialPreview(
     mimeType: getMimeType(value),
     missingReason: "old-not-persisted",
   };
-}
-
-function safeSegment(value: string) {
-  const extension = path.extname(value);
-  const base = path.basename(value, extension);
-  const safeBase = base.replace(/[^a-zA-Z0-9_-]/g, "_") || "exam-material";
-  const safeExtension = extension.replace(/[^a-zA-Z0-9.]/g, "").toLowerCase();
-
-  return `${safeBase}${safeExtension}`;
 }
 
 function getFileName(value: string) {

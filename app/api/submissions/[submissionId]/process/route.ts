@@ -3,9 +3,15 @@ import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { gradeSubmission } from "@/lib/grading";
 import { msSince, perfLog } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
-import { readSubmissionImageFile } from "@/lib/submission-image-storage";
+import {
+  readSubmissionImageFile,
+  readSubmissionPageFile,
+} from "@/lib/submission-image-storage";
 import { decideProcessedSubmissionStatus } from "@/lib/submission-state";
-import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
+import {
+  analyzeStudentAnswerPages,
+  analyzeStudentAnswerSheet,
+} from "@/lib/student-answer-vision";
 
 export const runtime = "nodejs";
 
@@ -32,6 +38,17 @@ export async function POST(
         examId: true,
         imageUrl: true,
         status: true,
+        pages: {
+          orderBy: { pageNumber: "asc" },
+          select: {
+            id: true,
+            pageNumber: true,
+            fileName: true,
+            mimeType: true,
+            storagePath: true,
+            publicUrl: true,
+          },
+        },
         exam: {
           select: {
             answerKeys: {
@@ -43,6 +60,7 @@ export async function POST(
               select: {
                 number: true,
                 points: true,
+                sourcePageNumber: true,
                 options: {
                   orderBy: { createdAt: "asc" },
                   select: { label: true, isCorrect: true },
@@ -83,20 +101,41 @@ export async function POST(
       where: { id: submissionId },
       data: { status: "PROCESSING" },
     });
+    await prisma.submissionPage.updateMany({
+      where: { submissionId },
+      data: { status: "PROCESSING", errorMessage: null },
+    });
     revalidatePath(`/exams/${submission.examId}/submissions`);
     revalidatePath(`/exams/${submission.examId}/results`);
 
     const fileStartedAt = Date.now();
-    const imageFile = await readSubmissionImageFile(submission.imageUrl);
+    const pageFiles =
+      submission.pages.length > 0
+        ? await Promise.all(
+            submission.pages.map(async (page) => ({
+              pageNumber: page.pageNumber,
+              file: await readSubmissionPageFile(page),
+            }))
+          )
+        : [];
+    const imageFile =
+      pageFiles.length === 0 ? await readSubmissionImageFile(submission.imageUrl) : null;
     const fileMs = msSince(fileStartedAt);
 
     console.info(`[submission-process] gemini start submissionId=${submissionId}`);
     const geminiStartedAt = Date.now();
-    const analysis = await analyzeStudentAnswerSheet(
-      imageFile,
-      questionNumbers,
-      optionLabelsByQuestion
-    );
+    const analysis =
+      pageFiles.length > 0
+        ? await analyzeStudentAnswerPages(
+            pageFiles,
+            questionNumbers,
+            optionLabelsByQuestion
+          )
+        : await analyzeStudentAnswerSheet(
+            imageFile as File,
+            questionNumbers,
+            optionLabelsByQuestion
+          );
     const geminiMs = msSince(geminiStartedAt);
     console.info(`[submission-process] geminiMs=${geminiMs} submissionId=${submissionId}`);
 
@@ -140,8 +179,16 @@ export async function POST(
             score: grading.totalScore,
             total: grading.maxScore,
             percentage: grading.percentage,
+            pageCount: pageFiles.length || 1,
+            gradingDetails: grading.rows,
           },
         });
+        if (pageFiles.length > 0) {
+          await tx.submissionPage.updateMany({
+            where: { submissionId },
+            data: { status: "PROCESSED", extractionJson: analysis },
+          });
+        }
       },
       { timeout: 30000 }
     );
@@ -169,9 +216,15 @@ export async function POST(
     );
 
     if (examId) {
-      await prisma.submission.update({
-        where: { id: submissionId },
-        data: { status: "FAILED" },
+      await prisma.$transaction(async (tx) => {
+        await tx.submission.update({
+          where: { id: submissionId },
+          data: { status: "FAILED" },
+        });
+        await tx.submissionPage.updateMany({
+          where: { submissionId },
+          data: { status: "FAILED", errorMessage: getErrorMessage(error) },
+        });
       });
       revalidatePath(`/exams/${examId}/submissions`);
       revalidatePath(`/exams/${examId}/results`);

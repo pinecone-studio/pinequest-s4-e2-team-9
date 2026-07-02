@@ -6,6 +6,7 @@ import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { gradeSubmission } from "@/lib/grading";
 import { analyzeStudentAnswerSheet } from "@/lib/student-answer-vision";
 import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
+import { deleteSubmissionStorageObjects } from "@/lib/upload-storage";
 import { msSince, perfLog } from "@/lib/perf";
 import {
   decideProcessedSubmissionStatus,
@@ -69,6 +70,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
         select: {
           number: true,
           points: true,
+          sourcePageNumber: true,
           options: {
             orderBy: { createdAt: "asc" },
             select: { label: true, isCorrect: true },
@@ -127,6 +129,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
     clientSubmissionKey: randomUUID(),
   });
   const dbStartedAt = Date.now();
+  let oldStoragePaths: string[] = [];
   const submission = await prisma.$transaction(
     async (tx) => {
       const existingSubmission = await tx.submission.findFirst({
@@ -136,11 +139,18 @@ export async function createSubmissionDraftAction(formData: FormData) {
         },
         select: {
           id: true,
+          pages: { select: { storagePath: true } },
         },
       });
 
       if (existingSubmission) {
+        oldStoragePaths = existingSubmission.pages.map((page) => page.storagePath);
         await tx.submissionAnswer.deleteMany({
+          where: {
+            submissionId: existingSubmission.id,
+          },
+        });
+        await tx.submissionPage.deleteMany({
           where: {
             submissionId: existingSubmission.id,
           },
@@ -156,6 +166,8 @@ export async function createSubmissionDraftAction(formData: FormData) {
             score: grading.totalScore,
             total: grading.maxScore,
             percentage: grading.percentage,
+            pageCount: 1,
+            gradingDetails: grading.rows,
           },
         });
 
@@ -178,6 +190,8 @@ export async function createSubmissionDraftAction(formData: FormData) {
           score: grading.totalScore,
           total: grading.maxScore,
           percentage: grading.percentage,
+          pageCount: 1,
+          gradingDetails: grading.rows,
         },
       });
 
@@ -192,6 +206,7 @@ export async function createSubmissionDraftAction(formData: FormData) {
     },
     { timeout: 30000 }
   );
+  await deleteSubmissionStorageObjects(oldStoragePaths);
   console.info(`[submission-speed] dbSaveMs=${Date.now() - dbStartedAt}`);
 
   console.info("[createSubmissionDraftAction] AI confidence", analysis.confidence);
@@ -241,6 +256,7 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
             select: {
               number: true,
               points: true,
+              sourcePageNumber: true,
               options: {
                 orderBy: { createdAt: "asc" },
                 select: { label: true, isCorrect: true },
@@ -299,6 +315,7 @@ export async function saveReviewedSubmissionAction(formData: FormData) {
           score: grading.totalScore,
           total: grading.maxScore,
           percentage: grading.percentage,
+          gradingDetails: grading.rows,
         },
       });
       console.info(`[review-save-speed] updateSubmissionMs=${Date.now() - updateStartedAt}`);

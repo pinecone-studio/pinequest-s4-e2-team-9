@@ -46,6 +46,23 @@ If it is missing, add it:
 alter publication supabase_realtime add table public."Submission";
 ```
 
+## Supabase Storage Uploads
+
+Deployed uploads use the existing Supabase Storage buckets:
+
+- `exam-materials` for exam material pages
+- `submissions` for student answer pages
+
+For the hackathon demo, both buckets can be public. Allow `image/jpeg`, `image/png`, `image/webp`, and `application/pdf` if PDF material upload is enabled. The current upload limit is 20 MB.
+
+Required deployed env vars:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` for server-side storage upload, delete, download, and signed URL fallback
+
+Do not create `duntuslah-uploads`; the app infers the bucket from the model/helper and stores only the object path inside that bucket.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

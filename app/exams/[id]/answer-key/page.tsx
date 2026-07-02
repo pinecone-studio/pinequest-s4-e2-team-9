@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 import { AlertCircle, ArrowLeft, BarChart3, UploadCloud } from "lucide-react";
 import AnswerKeyReviewLayout from "@/components/exams/answer-key-review-layout";
 import AnswerKeyReviewForm from "@/components/exams/answer-key-review-form";
+import ExamMaterialPagesPanel from "@/components/exams/exam-material-pages-panel";
 import PageHeader from "@/components/layout/page-header";
 import { getExamMaterialPreview } from "@/lib/exam-material-storage";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import { requireCurrentUser } from "@/lib/supabase/server";
+import { getExamMaterialPageDisplayUrl } from "@/lib/upload-storage";
 
 export default async function AnswerKeyPage({
   params,
@@ -29,6 +31,19 @@ export default async function AnswerKeyPage({
       classroomId: true,
       materialUrl: true,
       questionCount: true,
+      materialPages: {
+        orderBy: { pageNumber: "asc" },
+        select: {
+          id: true,
+          pageNumber: true,
+          fileName: true,
+          mimeType: true,
+          storagePath: true,
+          publicUrl: true,
+          status: true,
+          errorMessage: true,
+        },
+      },
       classroom: { select: { name: true } },
       answerKeys: {
         orderBy: { question: "asc" },
@@ -41,6 +56,7 @@ export default async function AnswerKeyPage({
           number: true,
           text: true,
           points: true,
+          sourcePageNumber: true,
           options: {
             orderBy: { createdAt: "asc" },
             select: { id: true, label: true, text: true, isCorrect: true },
@@ -74,6 +90,7 @@ export default async function AnswerKeyPage({
     number: question.number,
     text: question.text,
     points: question.points,
+    sourcePageNumber: question.sourcePageNumber,
     options: question.options.map((option) => ({
       id: option.id,
       label: option.label,
@@ -97,7 +114,21 @@ export default async function AnswerKeyPage({
         question.options.every((option) => !option.text.trim())
     );
   const shouldShowAiFailedState = Boolean(exam.materialUrl) && hasNoParsedContent;
-  const originalMaterial = await getExamMaterialPreview(exam.materialUrl);
+  const materialPages = await Promise.all(
+    exam.materialPages.map(async (page) => ({
+      ...page,
+      publicUrl: await getExamMaterialPageDisplayUrl(page.storagePath, page.publicUrl),
+    }))
+  );
+  const firstMaterialPage = materialPages[0];
+  const originalMaterial = firstMaterialPage?.publicUrl
+    ? {
+        url: firstMaterialPage.publicUrl,
+        name: firstMaterialPage.fileName,
+        mimeType: firstMaterialPage.mimeType,
+        missingReason: "none" as const,
+      }
+    : await getExamMaterialPreview(exam.materialUrl);
 
   return (
     <div className="min-h-screen bg-stone-50/30 p-8">
@@ -142,6 +173,8 @@ export default async function AnswerKeyPage({
             </div>
           </PageHeader>
         </div>
+
+        <ExamMaterialPagesPanel examId={exam.id} pages={materialPages} />
 
         <AnswerKeyReviewLayout
           examId={exam.id}

@@ -1,50 +1,47 @@
 "use client";
 
 import type { ChangeEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, ChevronDown, Images, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Camera,
+  ChevronDown,
+  Images,
+  RefreshCw,
+  Trash2,
+  UploadCloud,
+} from "lucide-react";
 
 type StudentOption = {
   id: string;
   name: string;
 };
 
-type QueueStatus =
-  | "compressing"
-  | "queued"
-  | "uploading"
-  | "processing"
-  | "done"
-  | "failed";
+type PageStatus = "compressing" | "ready" | "uploading" | "processing" | "done" | "failed";
 
-type QueueItem = {
+type PendingPage = {
   localId: string;
-  clientSubmissionKey: string;
-  studentId: string;
-  studentName: string;
-  originalFileName: string;
+  file?: File;
   previewUrl: string;
+  originalFileName: string;
   originalSizeBytes: number;
   compressedSizeBytes?: number;
-  uploadFile?: File;
-  status: QueueStatus;
+  status: PageStatus;
   error?: string;
-  startedAt?: number;
-  submissionId?: string;
 };
 
 type EnqueueResponse = {
   ok?: boolean;
   submissionId?: string;
+  pageCount?: number;
   status?: string;
   error?: string;
 };
 
-const uploadConcurrency = 2;
 const maxWidth = 1400;
 const maxHeight = 1800;
 const jpegQuality = 0.75;
-const isDev = process.env.NODE_ENV === "development";
 
 export default function PhoneCaptureQueue({
   examId,
@@ -58,143 +55,19 @@ export default function PhoneCaptureQueue({
   isAnswerKeyReady: boolean;
 }) {
   const [selectedStudentId, setSelectedStudentId] = useState("");
-  const [selectedStudentIdRefValue, setSelectedStudentIdRefValue] = useState("");
-  const [lastStudentSelection, setLastStudentSelection] = useState("(none)");
-  const [studentSelectionCount, setStudentSelectionCount] = useState(0);
-  const [lastEvent, setLastEvent] = useState("(none)");
   const [isStudentDropdownOpen, setIsStudentDropdownOpen] = useState(false);
-  const [lastDropdownToggleEvent, setLastDropdownToggleEvent] = useState("(none)");
-  const [lastDropdownOptionClick, setLastDropdownOptionClick] = useState("(none)");
-  const [items, setItems] = useState<QueueItem[]>([]);
+  const [pages, setPages] = useState<PendingPage[]>([]);
   const [message, setMessage] = useState("");
-  const [wakeQueue, setWakeQueue] = useState(0);
-  const activeUploadsRef = useRef(0);
-  const startedLocalIdsRef = useRef(new Set<string>());
-  const previewUrlsRef = useRef<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const selectedStudentIdRef = useRef(selectedStudentId);
   const lastDropdownTouchAtRef = useRef(0);
+  const previewUrlsRef = useRef<string[]>([]);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
 
-  const setQueue = useCallback((updater: (items: QueueItem[]) => QueueItem[]) => {
-    setItems((currentItems) => updater(currentItems));
-  }, []);
-
-  const patchItem = useCallback(
-    (localId: string, patch: Partial<QueueItem>) => {
-      setQueue((currentItems) =>
-        currentItems.map((item) =>
-          item.localId === localId ? { ...item, ...patch } : item
-        )
-      );
-    },
-    [setQueue]
-  );
-
-  const triggerProcessing = useCallback(
-    (item: QueueItem, submissionId: string) => {
-      log(`[capture-queue] process trigger submissionId=${submissionId}`);
-      void fetch(`/api/submissions/${submissionId}/process`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: captureToken }),
-      })
-        .then(async (response) => {
-          const data = await readJson<EnqueueResponse>(response);
-
-          if (!response.ok || data?.ok === false) {
-            throw new Error(data?.error || "AI боловсруулалт амжилтгүй боллоо.");
-          }
-
-          patchItem(item.localId, {
-            status: "done",
-            error: "",
-          });
-        })
-        .catch((error: unknown) => {
-          patchItem(item.localId, {
-            status: "failed",
-            error: getErrorMessage(error),
-          });
-        });
-    },
-    [captureToken, patchItem]
-  );
-
-  const uploadQueueItem = useCallback(
-    async (item: QueueItem) => {
-      if (!item.uploadFile) {
-        throw new Error("Илгээх зураг бэлэн биш байна.");
-      }
-
-      const formData = new FormData();
-      formData.set("token", captureToken);
-      formData.set("studentId", item.studentId);
-      formData.set("clientSubmissionKey", item.clientSubmissionKey);
-      formData.set("image", item.uploadFile);
-
-      log(`[capture-queue] upload start localId=${item.localId}`);
-      const response = await fetch(`/api/exams/${examId}/capture/enqueue`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await readJson<EnqueueResponse>(response);
-
-      if (!response.ok || !data?.ok || !data.submissionId) {
-        throw new Error(data?.error || "Зураг илгээхэд алдаа гарлаа.");
-      }
-
-      log(`[capture-queue] enqueue success submissionId=${data.submissionId}`);
-      patchItem(item.localId, {
-        status: "processing",
-        submissionId: data.submissionId,
-        error: "",
-      });
-      triggerProcessing(item, data.submissionId);
-    },
-    [
-      captureToken,
-      examId,
-      patchItem,
-      triggerProcessing,
-    ]
-  );
-
   useEffect(() => {
-    const availableSlots = uploadConcurrency - activeUploadsRef.current;
-
-    if (availableSlots <= 0) {
-      return;
-    }
-
-    const nextItems = items
-      .filter(
-        (item) =>
-          item.status === "queued" && !startedLocalIdsRef.current.has(item.localId)
-      )
-      .slice(0, availableSlots);
-
-    nextItems.forEach((item) => {
-      activeUploadsRef.current += 1;
-      startedLocalIdsRef.current.add(item.localId);
-      patchItem(item.localId, {
-        status: "uploading",
-        startedAt: Date.now(),
-        error: "",
-      });
-      void uploadQueueItem(item)
-        .catch((error: unknown) => {
-          patchItem(item.localId, {
-            status: "failed",
-            error: getErrorMessage(error),
-          });
-        })
-        .finally(() => {
-          activeUploadsRef.current -= 1;
-          setWakeQueue((value) => value + 1);
-        });
-    });
-  }, [items, patchItem, uploadQueueItem, wakeQueue]);
+    selectedStudentIdRef.current = selectedStudentId;
+  }, [selectedStudentId]);
 
   useEffect(
     () => () => {
@@ -203,123 +76,91 @@ export default function PhoneCaptureQueue({
     []
   );
 
-  async function handleFileChange(
-    event: ChangeEvent<HTMLInputElement>,
-    source: "camera" | "gallery"
-  ) {
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
-    const file = input.files?.[0] ?? null;
-    const currentSelectedStudentId = selectedStudentIdRef.current || selectedStudentId;
-    const student = students.find((item) => item.id === currentSelectedStudentId);
-
-    setMessage("");
-
-    if (!file) {
-      log("[capture-input] no file selected");
-      input.value = "";
-      return;
-    }
+    const selectedFiles = Array.from(input.files ?? []);
+    const currentStudentId = selectedStudentIdRef.current;
 
     input.value = "";
-    log(
-      `[capture-input] ${source} selected name=${file.name} type=${file.type || "unknown"} size=${file.size}`
-    );
+    setMessage("");
 
-    if (!student) {
+    if (!isAnswerKeyReady) {
+      setMessage("Эхлээд хариултын түлхүүрээ баталгаажуулна уу.");
+      return;
+    }
+
+    if (!currentStudentId.trim()) {
       setMessage("Эхлээд сурагч сонгоно уу.");
       return;
     }
 
-    if (!file.type.startsWith("image/")) {
-      setMessage("Зургийн файл сонгоно уу.");
+    if (selectedFiles.length === 0) {
       return;
     }
 
-    if (!currentSelectedStudentId.trim() || !student) {
-      setMessage("Эхлээд сурагч сонгоно уу.");
-      return;
-    }
+    for (const file of selectedFiles) {
+      if (!file.type.startsWith("image/")) {
+        setMessage("Зөвхөн зургийн файл сонгоно уу.");
+        continue;
+      }
 
-    log(`[capture-queue] enqueue examId=${examId} studentId=${currentSelectedStudentId} file=${file.name}`);
-
-    const localId = randomId();
-    const clientSubmissionKey = randomId();
-    const previewUrl = URL.createObjectURL(file);
-    previewUrlsRef.current.push(previewUrl);
-
-    log(`[capture-queue] queued localId=${localId} studentId=${currentSelectedStudentId}`);
-    setQueue((currentItems) => [
-      {
+      const localId = randomId();
+      const previewUrl = URL.createObjectURL(file);
+      previewUrlsRef.current.push(previewUrl);
+      const page: PendingPage = {
         localId,
-        clientSubmissionKey,
-        studentId: currentSelectedStudentId,
-        studentName: student.name,
-        originalFileName: file.name,
         previewUrl,
+        originalFileName: file.name,
         originalSizeBytes: file.size,
         status: "compressing",
-      },
-      ...currentItems,
-    ]);
+      };
 
-    try {
-      const compressedFile = await compressImage(file);
-      const uploadFile = compressedFile.size < file.size ? compressedFile : file;
+      setPages((current) => [...current, page]);
 
-      log(
-        `[capture-queue] compressed original=${file.size} compressed=${uploadFile.size}`
-      );
-      patchItem(localId, {
-        uploadFile,
-        compressedSizeBytes: uploadFile.size,
-        status: "queued",
-      });
-    } catch (error) {
-      console.warn("[capture-queue] compression failed, using original", error);
-      patchItem(localId, {
-        uploadFile: file,
-        compressedSizeBytes: file.size,
-        status: "queued",
-      });
+      try {
+        const compressed = await compressImage(file);
+        const uploadFile = compressed.size < file.size ? compressed : file;
+
+        setPages((current) =>
+          current.map((item) =>
+            item.localId === localId
+              ? {
+                  ...item,
+                  file: uploadFile,
+                  compressedSizeBytes: uploadFile.size,
+                  status: "ready",
+                }
+              : item
+          )
+        );
+      } catch (error) {
+        console.warn("[capture-queue] compression failed, using original", error);
+        setPages((current) =>
+          current.map((item) =>
+            item.localId === localId
+              ? {
+                  ...item,
+                  file,
+                  compressedSizeBytes: file.size,
+                  status: "ready",
+                }
+              : item
+          )
+        );
+      }
     }
   }
 
-  function retryItem(localId: string) {
-    startedLocalIdsRef.current.delete(localId);
-    patchItem(localId, {
-      status: "queued",
-      error: "",
-      startedAt: undefined,
-      submissionId: undefined,
-    });
-    setWakeQueue((value) => value + 1);
-  }
-
-  function handleCameraFileChange(event: ChangeEvent<HTMLInputElement>) {
-    void handleFileChange(event, "camera");
-  }
-
-  function handleGalleryFileChange(event: ChangeEvent<HTMLInputElement>) {
-    void handleFileChange(event, "gallery");
-  }
-
-  function selectStudent(studentId: string, source: string) {
+  function selectStudent(studentId: string) {
     const student = students.find((item) => item.id === studentId);
 
-    log(`[capture-student] source=${source} studentId=${studentId} name=${student?.name ?? ""}`);
-
     selectedStudentIdRef.current = studentId;
-    setSelectedStudentIdRefValue(studentId);
-    setLastStudentSelection(`${source}: ${student?.name ?? "(unknown)"} / ${studentId}`);
-    setStudentSelectionCount((count) => count + 1);
-    setLastEvent(`student ${source}`);
     setSelectedStudentId(studentId);
-    setMessage(studentId ? `Сонгосон сурагч: ${student?.name ?? studentId}` : "Сурагч сонгоно уу.");
+    setIsStudentDropdownOpen(false);
+    setMessage(student ? `Сонгосон сурагч: ${student.name}` : "Сурагч сонгоно уу.");
   }
 
-  function toggleStudentDropdown(source: string) {
-    setLastEvent(source);
-    setLastDropdownToggleEvent(source);
+  function toggleStudentDropdown() {
     setIsStudentDropdownOpen((open) => !open);
   }
 
@@ -331,215 +172,227 @@ export default function PhoneCaptureQueue({
     return Date.now() - lastDropdownTouchAtRef.current < 700;
   }
 
-  function handleStudentOptionSelect(studentId: string, source: string) {
-    selectStudent(studentId, source);
-    setLastDropdownOptionClick(`${source}: ${studentId}`);
-    setIsStudentDropdownOpen(false);
+  function openPicker(source: "camera" | "gallery") {
+    if (!isAnswerKeyReady) {
+      setMessage("Эхлээд хариултын түлхүүрээ баталгаажуулна уу.");
+      return;
+    }
+
+    if (!selectedStudentIdRef.current.trim()) {
+      setMessage("Эхлээд сурагч сонгоно уу.");
+      return;
+    }
+
+    (source === "camera" ? cameraInputRef : galleryInputRef).current?.click();
   }
 
-  function openPicker(source: "camera" | "gallery") {
-    const currentSelectedStudentId = selectedStudentIdRef.current || selectedStudentId;
+  function removePage(localId: string) {
+    setPages((current) => {
+      const page = current.find((item) => item.localId === localId);
 
-    setLastEvent(`${source} clicked`);
-    log(`[capture-picker] source=${source} studentId=${currentSelectedStudentId} ready=${isAnswerKeyReady}`);
+      if (page) {
+        URL.revokeObjectURL(page.previewUrl);
+        previewUrlsRef.current = previewUrlsRef.current.filter((url) => url !== page.previewUrl);
+      }
+
+      return current.filter((item) => item.localId !== localId);
+    });
+  }
+
+  function movePage(localId: string, direction: -1 | 1) {
+    setPages((current) => {
+      const index = current.findIndex((item) => item.localId === localId);
+      const nextIndex = index + direction;
+
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) {
+        return current;
+      }
+
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+
+      return next;
+    });
+  }
+
+  async function processPages() {
+    const studentId = selectedStudentIdRef.current;
+
+    setMessage("");
 
     if (!isAnswerKeyReady) {
       setMessage("Эхлээд хариултын түлхүүрээ баталгаажуулна уу.");
       return;
     }
 
-    if (!currentSelectedStudentId.trim()) {
+    if (!studentId.trim()) {
       setMessage("Эхлээд сурагч сонгоно уу.");
       return;
     }
 
-    setMessage("Зураг сонгоно уу.");
-    log("[capture-picker] triggering file input");
-    (source === "camera" ? cameraInputRef : galleryInputRef).current?.click();
+    if (pages.length === 0) {
+      setMessage("Эхлээд хариултын хуудас нэмнэ үү.");
+      return;
+    }
+
+    if (pages.some((page) => page.status === "compressing" || !page.file)) {
+      setMessage("Зураг бэлэн болтол түр хүлээнэ үү.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setPages((current) => current.map((page) => ({ ...page, status: "uploading", error: "" })));
+
+    try {
+      const formData = new FormData();
+      formData.set("token", captureToken);
+      formData.set("studentId", studentId);
+      pages.forEach((page) => {
+        if (page.file) {
+          formData.append("files", page.file);
+        }
+      });
+
+      const response = await fetch(`/api/exams/${examId}/capture/enqueue`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await readJson<EnqueueResponse>(response);
+
+      if (!response.ok || !data?.ok || !data.submissionId) {
+        throw new Error(data?.error || "Зураг илгээхэд алдаа гарлаа.");
+      }
+
+      setPages((current) => current.map((page) => ({ ...page, status: "done" })));
+      setMessage(
+        `Амжилттай илгээгдлээ. ${data.pageCount ?? pages.length} хуудас нэг хариултын материал болж боловсруулагдлаа.`
+      );
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+
+      setPages((current) =>
+        current.map((page) => ({ ...page, status: "failed", error: errorMessage }))
+      );
+      setMessage(errorMessage);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
-  const firstStudent = students[0];
   const selectedStudent = students.find((student) => student.id === selectedStudentId);
-  const selectedStudentName = selectedStudent?.name ?? "(none)";
-  const canCapture = isAnswerKeyReady && selectedStudentId.trim().length > 0;
-  const enqueueStudentId = selectedStudentId;
-  const renderedDropdownOptionCount = isStudentDropdownOpen ? students.length : 0;
-  const cameraButtonClass =
-    "flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-[#8B5E3C] px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-[#734d31]";
-  const galleryButtonClass =
-    "flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-4 text-base font-semibold text-stone-800 shadow-sm hover:bg-stone-50";
-  const latestItem = items[0];
+  const readyCount = pages.filter((page) => page.status !== "compressing").length;
   const statusMessage =
     message ||
-    (latestItem
-      ? getStatusMessage(latestItem)
-      : !isAnswerKeyReady
-        ? "Эхлээд хариултын түлхүүрээ баталгаажуулна уу."
-        : !selectedStudentId
-          ? "Сурагч сонгоно уу."
-          : "");
+    (!isAnswerKeyReady
+      ? "Эхлээд хариултын түлхүүрээ баталгаажуулна уу."
+      : !selectedStudentId
+        ? "Сурагч сонгоно уу."
+        : "");
 
   return (
     <div className="mt-5 space-y-5">
       <div>
         <label htmlFor="studentDropdown" className="mb-1.5 block text-sm font-semibold text-stone-700">
-          Сурагч
+          Сурагч сонгох
         </label>
-        <div>
-          <button
-            type="button"
-            id="studentDropdown"
-            role="combobox"
-            aria-expanded={isStudentDropdownOpen}
-            aria-controls="studentDropdownOptions"
-            onTouchEnd={(event) => {
-              event.preventDefault();
-              markDropdownTouch();
-              toggleStudentDropdown("student dropdown trigger touch");
-            }}
-            onClick={() => {
-              if (shouldSkipSyntheticClick()) {
-                return;
-              }
-
-              toggleStudentDropdown("student dropdown trigger click");
-            }}
-            className="flex w-full items-center justify-between gap-3 rounded-lg border border-stone-300 bg-white px-3 py-2 text-left text-sm text-stone-900 shadow-sm focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+        <button
+          type="button"
+          id="studentDropdown"
+          role="combobox"
+          aria-expanded={isStudentDropdownOpen}
+          aria-controls="studentDropdownOptions"
+          onTouchEnd={(event) => {
+            event.preventDefault();
+            markDropdownTouch();
+            toggleStudentDropdown();
+          }}
+          onClick={() => {
+            if (!shouldSkipSyntheticClick()) {
+              toggleStudentDropdown();
+            }
+          }}
+          className="flex w-full items-center justify-between gap-3 rounded-lg border border-stone-300 bg-white px-3 py-3 text-left text-sm text-stone-900 shadow-sm focus:border-[#8B5E3C] focus:outline-none focus:ring-2 focus:ring-[#8B5E3C]"
+        >
+          <span>{selectedStudent ? selectedStudent.name : "Сурагч сонгох"}</span>
+          <ChevronDown className="size-4 shrink-0 text-stone-500" aria-hidden="true" />
+        </button>
+        {isStudentDropdownOpen ? (
+          <div
+            id="studentDropdownOptions"
+            role="listbox"
+            className="relative z-20 mt-2 max-h-64 w-full overflow-y-auto rounded-lg border border-stone-300 bg-white text-sm shadow-lg"
           >
-            <span>{selectedStudent ? selectedStudent.name : "Сурагч сонгох"}</span>
-            <ChevronDown className="size-4 shrink-0 text-stone-500" aria-hidden="true" />
-          </button>
-          {isStudentDropdownOpen ? (
-            <div
-              id="studentDropdownOptions"
-              role="listbox"
-              className="relative z-20 mt-2 max-h-64 w-full overflow-y-auto rounded-lg border border-stone-300 bg-white text-sm shadow-lg"
-            >
-              {students.map((student) => {
-                const isSelected = student.id === selectedStudentId;
+            {students.map((student) => {
+              const isSelected = student.id === selectedStudentId;
 
-                return (
-                  <button
-                    type="button"
-                    key={student.id}
-                    role="option"
-                    aria-selected={isSelected}
-                    data-student-id={student.id}
-                    onTouchEnd={(event) => {
-                      event.preventDefault();
-                      markDropdownTouch();
-                      handleStudentOptionSelect(
-                        student.id,
-                        "custom dropdown option touch"
-                      );
-                    }}
-                    onClick={() => {
-                      if (shouldSkipSyntheticClick()) {
-                        return;
-                      }
-
-                      handleStudentOptionSelect(
-                        student.id,
-                        "custom dropdown option click"
-                      );
-                    }}
-                    className={`flex w-full items-center justify-between border-b border-stone-100 px-4 py-3 text-left font-medium last:border-b-0 ${
-                      isSelected
-                        ? "bg-[#8B5E3C] text-white"
-                        : "text-stone-800 hover:bg-stone-100"
-                    }`}
-                  >
-                    <span>{student.name}</span>
-                    {isSelected ? <span aria-hidden="true">✓</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
-        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 rounded-lg bg-stone-100 p-2 text-xs text-stone-700">
-          <dt>selectedStudentId:</dt>
-          <dd className="break-all font-semibold">{selectedStudentId || "(empty)"}</dd>
-          <dt>selectedStudentIdRef.current:</dt>
-          <dd className="break-all font-semibold">
-            {selectedStudentIdRefValue || "(empty)"}
-          </dd>
-          <dt>selectedStudentName:</dt>
-          <dd className="font-semibold">{selectedStudentName}</dd>
-          <dt>isAnswerKeyReady:</dt>
-          <dd className="font-semibold">{String(isAnswerKeyReady)}</dd>
-          <dt>canCapture:</dt>
-          <dd className="font-semibold">{String(canCapture)}</dd>
-          <dt>students.length:</dt>
-          <dd className="font-semibold">{students.length}</dd>
-          <dt>isStudentDropdownOpen:</dt>
-          <dd className="font-semibold">{String(isStudentDropdownOpen)}</dd>
-          <dt>renderedDropdownOptionCount:</dt>
-          <dd className="font-semibold">{renderedDropdownOptionCount}</dd>
-          <dt>lastDropdownToggleEvent:</dt>
-          <dd className="break-all font-semibold">{lastDropdownToggleEvent}</dd>
-          <dt>lastDropdownOptionClick:</dt>
-          <dd className="break-all font-semibold">{lastDropdownOptionClick}</dd>
-          <dt>enqueueStudentId:</dt>
-          <dd className="break-all font-semibold">{enqueueStudentId || "(empty)"}</dd>
-          <dt>lastStudentSelection:</dt>
-          <dd className="break-all font-semibold">{lastStudentSelection}</dd>
-          <dt>studentSelectionCount:</dt>
-          <dd className="font-semibold">{studentSelectionCount}</dd>
-          <dt>lastEvent:</dt>
-          <dd className="font-semibold">{lastEvent}</dd>
-          <dt>firstStudent.id:</dt>
-          <dd className="break-all font-semibold">
-            {firstStudent ? firstStudent.id : "(none)"}
-          </dd>
-          <dt>firstStudent.name:</dt>
-          <dd className="font-semibold">
-            {firstStudent ? firstStudent.name : "(none)"}
-          </dd>
-          <dt>Object.keys(firstStudent):</dt>
-          <dd className="break-all font-semibold">
-            {firstStudent ? Object.keys(firstStudent).join(", ") : "(none)"}
-          </dd>
-        </dl>
+              return (
+                <button
+                  type="button"
+                  key={student.id}
+                  role="option"
+                  aria-selected={isSelected}
+                  onTouchEnd={(event) => {
+                    event.preventDefault();
+                    markDropdownTouch();
+                    selectStudent(student.id);
+                  }}
+                  onClick={() => {
+                    if (!shouldSkipSyntheticClick()) {
+                      selectStudent(student.id);
+                    }
+                  }}
+                  className={`flex w-full items-center justify-between border-b border-stone-100 px-4 py-3 text-left font-medium last:border-b-0 ${
+                    isSelected ? "bg-[#8B5E3C] text-white" : "text-stone-800 hover:bg-stone-100"
+                  }`}
+                >
+                  <span>{student.name}</span>
+                  {isSelected ? <span aria-hidden="true">✓</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       <div>
-        <p className="mb-1.5 block text-sm font-semibold text-stone-700">
-          Хариултын хуудасны зураг
-        </p>
+        <p className="mb-1.5 block text-sm font-semibold text-stone-700">Хуудас нэмэх</p>
         <input
           ref={cameraInputRef}
           type="file"
           accept="image/*"
           capture="environment"
-          onChange={handleCameraFileChange}
+          onChange={handleFileChange}
           className="sr-only"
         />
         <input
           ref={galleryInputRef}
           type="file"
           accept="image/*"
-          onChange={handleGalleryFileChange}
+          multiple
+          onChange={handleFileChange}
           className="sr-only"
         />
         <div className="grid gap-3 sm:grid-cols-2">
           <button
             type="button"
             onClick={() => openPicker("camera")}
-            className={cameraButtonClass}
+            className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-[#8B5E3C] px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-[#734d31]"
           >
             <Camera className="size-5" aria-hidden="true" />
-            <span>Камераар зураг авах</span>
+            <span>Камер нээх</span>
           </button>
           <button
             type="button"
             onClick={() => openPicker("gallery")}
-            className={galleryButtonClass}
+            className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-4 text-base font-semibold text-stone-800 shadow-sm hover:bg-stone-50"
           >
             <Images className="size-5" aria-hidden="true" />
-            <span>Галерейгаас сонгох</span>
+            <span>Зураг сонгох</span>
           </button>
         </div>
+        <p className="mt-2 text-xs font-medium text-stone-500">
+          Энэ сурагчийн бүх хуудас нэг хариултын материал болж илгээгдэнэ.
+        </p>
         {statusMessage ? (
           <p className="mt-2 text-xs font-semibold text-amber-700" role="status">
             {statusMessage}
@@ -547,57 +400,96 @@ export default function PhoneCaptureQueue({
         ) : null}
       </div>
 
-      {items.length > 0 ? (
+      {pages.length > 0 ? (
         <div className="space-y-3" aria-live="polite">
-          {items.map((item) => (
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-bold text-stone-900">Оруулсан хуудаснууд</h3>
+            <span className="text-xs font-semibold text-stone-500">
+              {readyCount}/{pages.length} бэлэн
+            </span>
+          </div>
+          {pages.map((page, index) => (
             <div
-              key={item.localId}
-              className="grid grid-cols-[52px_1fr] gap-3 rounded-lg border border-stone-200 bg-stone-50/60 p-3"
+              key={page.localId}
+              className="grid grid-cols-[64px_1fr] gap-3 rounded-lg border border-stone-200 bg-stone-50/60 p-3"
             >
               <div
                 role="img"
-                aria-label={`${item.studentName} preview`}
-                className="h-12 w-12 rounded-md bg-stone-200 bg-cover bg-center"
-                style={{ backgroundImage: `url(${item.previewUrl})` }}
+                aria-label={`Хуудас ${index + 1}`}
+                className="h-16 w-16 rounded-md bg-stone-200 bg-cover bg-center"
+                style={{ backgroundImage: `url(${page.previewUrl})` }}
               />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-bold text-stone-900">
-                      {item.studentName}
+                      Хуудас {index + 1}
                     </p>
                     <p className="truncate text-xs text-stone-500">
-                      {item.originalFileName}
+                      {page.originalFileName}
                     </p>
                   </div>
-                  <span className={getStatusClass(item.status)}>
-                    {getStatusText(item.status)}
+                  <span className={getStatusClass(page.status)}>
+                    {getStatusText(page.status)}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-stone-500">
-                  Эх файл: {formatBytes(item.originalSizeBytes)}
-                  {item.compressedSizeBytes
-                    ? ` · Илгээх файл: ${formatBytes(item.compressedSizeBytes)}`
+                  Эх файл: {formatBytes(page.originalSizeBytes)}
+                  {page.compressedSizeBytes
+                    ? ` · Илгээх файл: ${formatBytes(page.compressedSizeBytes)}`
                     : ""}
                 </p>
-                {item.error ? (
-                  <p className="mt-1 text-xs font-medium text-red-700">{item.error}</p>
+                {page.error ? (
+                  <p className="mt-1 text-xs font-medium text-red-700">{page.error}</p>
                 ) : null}
-                {item.status === "failed" ? (
+                <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => retryItem(item.localId)}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100"
+                    onClick={() => movePage(page.localId, -1)}
+                    disabled={index === 0 || isSubmitting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100 disabled:opacity-40"
                   >
-                    <RefreshCw className="size-3.5" aria-hidden="true" />
-                    Дахин оролдох
+                    <ArrowUp className="size-3.5" aria-hidden="true" />
+                    Дээш
                   </button>
-                ) : null}
+                  <button
+                    type="button"
+                    onClick={() => movePage(page.localId, 1)}
+                    disabled={index === pages.length - 1 || isSubmitting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100 disabled:opacity-40"
+                  >
+                    <ArrowDown className="size-3.5" aria-hidden="true" />
+                    Доош
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removePage(page.localId)}
+                    disabled={isSubmitting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-stone-700 hover:bg-stone-100 disabled:opacity-40"
+                  >
+                    <Trash2 className="size-3.5" aria-hidden="true" />
+                    Устгах
+                  </button>
+                </div>
               </div>
             </div>
           ))}
         </div>
       ) : null}
+
+      <button
+        type="button"
+        onClick={processPages}
+        disabled={isSubmitting}
+        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#8B5E3C] px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-[#734d31] disabled:cursor-not-allowed disabled:bg-stone-300"
+      >
+        {isSubmitting ? (
+          <RefreshCw className="size-5 animate-spin" aria-hidden="true" />
+        ) : (
+          <UploadCloud className="size-5" aria-hidden="true" />
+        )}
+        <span>{isSubmitting ? "Боловсруулж байна..." : "Боловсруулах"}</span>
+      </button>
     </div>
   );
 }
@@ -669,21 +561,21 @@ async function readJson<T>(response: Response) {
   return (await response.json().catch(() => null)) as T | null;
 }
 
-function getStatusText(status: QueueStatus) {
+function getStatusText(status: PageStatus) {
   if (status === "compressing") {
     return "Зураг шахаж байна";
   }
 
-  if (status === "queued") {
+  if (status === "ready") {
     return "Дараалалд байна";
   }
 
   if (status === "uploading") {
-    return "Зураг upload хийж байна";
+    return "Илгээж байна";
   }
 
   if (status === "processing") {
-    return "AI шалгалтад илгээгдлээ";
+    return "AI уншиж байна";
   }
 
   if (status === "done") {
@@ -693,19 +585,7 @@ function getStatusText(status: QueueStatus) {
   return "Алдаа гарсан";
 }
 
-function getStatusMessage(item: QueueItem) {
-  if (item.status === "failed") {
-    return `Алдаа: ${item.error || "Зураг илгээхэд алдаа гарлаа."}`;
-  }
-
-  if (item.status === "compressing") {
-    return "Зураг сонгогдлоо. Зураг шахаж байна.";
-  }
-
-  return getStatusText(item.status);
-}
-
-function getStatusClass(status: QueueStatus) {
+function getStatusClass(status: PageStatus) {
   if (status === "done") {
     return "inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800";
   }
@@ -737,10 +617,4 @@ function randomId() {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function log(message: string) {
-  if (isDev) {
-    console.log(message);
-  }
 }

@@ -1,8 +1,10 @@
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { isAnswerKeyReady } from "@/lib/answer-key-readiness";
 import { msSince, perfLog } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
-import { saveSubmissionImageFile } from "@/lib/submission-image-storage";
+import { saveSubmissionPageFile } from "@/lib/submission-image-storage";
+import { deleteSubmissionStorageObjects } from "@/lib/upload-storage";
 
 export const runtime = "nodejs";
 
@@ -20,15 +22,18 @@ export async function POST(
     const formData = await request.formData();
     const token = String(formData.get("token") || "").trim();
     const studentId = String(formData.get("studentId") || "").trim();
-    const clientSubmissionKey = String(formData.get("clientSubmissionKey") || "").trim();
-    const image = getFile(formData.get("image"));
+    const files = getFiles(formData);
     const formMs = msSince(formStartedAt);
 
-    if (!token || !studentId || !clientSubmissionKey || !image) {
+    if (!token || !studentId) {
       return jsonError("Илгээсэн мэдээлэл дутуу байна.", 400);
     }
 
-    if (!imageTypes.has(image.type)) {
+    if (files.length === 0) {
+      return jsonError("Хариултын хуудасны зураг илгээнэ үү.", 400);
+    }
+
+    if (files.some((file) => !imageTypes.has(file.type))) {
       return jsonError("Зөвхөн PNG, JPG, JPEG, WEBP зураг илгээнэ.", 400);
     }
 
@@ -66,36 +71,39 @@ export async function POST(
     }
 
     console.info(
-      `[capture-enqueue] start examId=${examId} studentId=${studentId} clientSubmissionKey=${clientSubmissionKey} imageBytes=${image.size}`
+      `[capture-enqueue] start examId=${examId} studentId=${studentId} pageCount=${files.length}`
     );
-    const imageStartedAt = Date.now();
-    const imageUrl = await saveSubmissionImageFile({
-      file: image,
-      examId,
-      clientSubmissionKey,
-    });
-    const imageMs = msSince(imageStartedAt);
     const dbStartedAt = Date.now();
+    let oldStoragePaths: string[] = [];
     const submission = await prisma.$transaction(
       async (tx) => {
         const existingSubmission = await tx.submission.findFirst({
           where: { examId, studentId },
-          select: { id: true },
+          select: {
+            id: true,
+            pages: { select: { storagePath: true } },
+          },
         });
 
         if (existingSubmission) {
+          oldStoragePaths = existingSubmission.pages.map((page) => page.storagePath);
           await tx.submissionAnswer.deleteMany({
+            where: { submissionId: existingSubmission.id },
+          });
+          await tx.submissionPage.deleteMany({
             where: { submissionId: existingSubmission.id },
           });
 
           return tx.submission.update({
             where: { id: existingSubmission.id },
             data: {
-              imageUrl,
+              imageUrl: null,
               status: "PROCESSING",
               score: 0,
               total: 0,
               percentage: 0,
+              pageCount: files.length,
+              gradingDetails: Prisma.JsonNull,
             },
           });
         }
@@ -104,32 +112,92 @@ export async function POST(
           data: {
             examId,
             studentId,
-            imageUrl,
+            imageUrl: null,
             status: "PROCESSING",
+            pageCount: files.length,
           },
         });
       },
       { timeout: 30000 }
     );
     const dbMs = msSince(dbStartedAt);
+    const imageStartedAt = Date.now();
+    const pages = await Promise.all(
+      files.map(async (file, index) => {
+        const pageNumber = index + 1;
+        const saved = await saveSubmissionPageFile({
+          file,
+          examId,
+          studentId,
+          submissionId: submission.id,
+          pageNumber,
+        });
+
+        return {
+          submissionId: submission.id,
+          pageNumber,
+          fileName: file.name || null,
+          mimeType: file.type || null,
+          storagePath: saved.storagePath,
+          publicUrl: saved.publicUrl,
+        };
+      })
+    );
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.submissionPage.createMany({ data: pages });
+          await tx.submission.update({
+            where: { id: submission.id },
+            data: { imageUrl: pages[0]?.publicUrl ?? pages[0]?.storagePath ?? null },
+          });
+        },
+        { timeout: 30000 }
+      );
+    } catch (error) {
+      await deleteSubmissionStorageObjects(pages.map((page) => page.storagePath));
+      throw error;
+    }
+    await deleteSubmissionStorageObjects(oldStoragePaths);
+    const imageMs = msSince(imageStartedAt);
 
     revalidatePath(`/exams/${examId}/submissions`);
     revalidatePath(`/exams/${examId}/results`);
+    const processResponse = await fetch(
+      new URL(`/api/submissions/${submission.id}/process`, request.url),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      }
+    );
+    const processData = (await processResponse.json().catch(() => null)) as {
+      ok?: boolean;
+      status?: string;
+      error?: string;
+    } | null;
+
+    if (!processResponse.ok || processData?.ok === false) {
+      return jsonError(processData?.error || "AI боловсруулалт амжилтгүй боллоо.", 500);
+    }
+
     perfLog("capture-enqueue", {
       formMs,
       examMs,
       imageMs,
       dbMs,
+      pages: files.length,
       totalMs: msSince(totalStartedAt),
     });
     console.info(
-      `[capture-enqueue] success submissionId=${submission.id} clientSubmissionKey=${clientSubmissionKey}`
+      `[capture-enqueue] success submissionId=${submission.id} pageCount=${files.length}`
     );
 
     return Response.json({
       ok: true,
       submissionId: submission.id,
-      status: submission.status,
+      status: processData?.status ?? submission.status,
+      pageCount: files.length,
     });
   } catch (error) {
     console.error("[capture-enqueue] failed", error);
@@ -138,10 +206,15 @@ export async function POST(
   }
 }
 
-function getFile(value: FormDataEntryValue | null) {
-  return typeof File !== "undefined" && value instanceof File && value.size > 0
-    ? value
-    : null;
+function getFiles(formData: FormData) {
+  const preferred = formData
+    .getAll("files")
+    .filter((value): value is File => typeof File !== "undefined" && value instanceof File && value.size > 0);
+  const fallback = ["file", "image"]
+    .flatMap((name) => formData.getAll(name))
+    .filter((value): value is File => typeof File !== "undefined" && value instanceof File && value.size > 0);
+
+  return preferred.length > 0 ? preferred : fallback;
 }
 
 function jsonError(error: string, status: number) {

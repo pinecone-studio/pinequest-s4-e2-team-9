@@ -5,6 +5,7 @@ type Confidence = "low" | "medium" | "high";
 
 export type ExamMaterialQuestion = {
   number: number;
+  sourcePageNumber?: number | null;
   text: string;
   points?: number;
   correctLabel?: string | null;
@@ -36,7 +37,13 @@ const jsonParseFallback: ExamMaterialAnalysis = {
 };
 
 const examPrompt = `Return compact JSON only. No markdown. No explanation.
-Extract only visible text from the image.
+This is one exam material. Pages, if multiple, are provided in order.
+Extract questions across all pages into one combined answer key.
+Keep global question numbering. Do not create separate exams per page.
+For now, only support multiple-choice A/B/C/D questions.
+If the correct answer is not visible, return correctLabel as null.
+Include sourcePageNumber for every question.
+Extract only visible text from the image pages.
 Keep notes under 120 characters.
 Do not repeat dotted blank lines.
 If question text contains many dots like "................", replace them with "____".
@@ -45,16 +52,24 @@ Keep question text compact.
 Do not guess correct answer.
 correctLabel must come only from printed "Зөв хариу X"; otherwise null.
 Preserve option labels exactly.
-Prefer object root with this shape: {"questionCount":number,"confidence":"low"|"medium"|"high","notes":string,"questions":[{"number":number,"text":string,"points":number,"correctLabel":string|null,"options":[{"label":string,"text":string}]}]}`;
+Prefer object root with this shape: {"questionCount":number,"confidence":"low"|"medium"|"high","notes":string,"questions":[{"number":number,"sourcePageNumber":1,"text":string,"points":number,"correctLabel":string|null,"options":[{"label":"A","text":string},{"label":"B","text":string},{"label":"C","text":string},{"label":"D","text":string}]}]}`;
 
 const compactRetryPrompt = `Return the same exam structure as VALID COMPACT JSON only. No markdown. No explanation. If unsure, omit unreadable questions. Keep notes under 120 characters. correctLabel only from printed "Зөв хариу X".`;
 
 export async function analyzeExamMaterial(
   file: File | null | undefined
 ): Promise<ExamMaterialAnalysis> {
+  return analyzeExamMaterialPages(file ? [{ file, pageNumber: 1 }] : []);
+}
+
+export async function analyzeExamMaterialPages(
+  pages: Array<{ file: File; pageNumber: number }>
+): Promise<ExamMaterialAnalysis> {
   const apiKey = process.env.GEMINI_API_KEY;
 
-  if (!file || file.size === 0) {
+  const files = pages.filter((page) => page.file.size > 0);
+
+  if (files.length === 0) {
     return manualFallback;
   }
 
@@ -65,28 +80,35 @@ export async function analyzeExamMaterial(
     };
   }
 
-  if (file.type === "application/pdf") {
+  if (files.some((page) => page.file.type === "application/pdf")) {
     return {
       ...manualFallback,
       notes: "PDF файлын автомат уншилтыг дараагийн хувилбарт сайжруулна. Одоогоор асуултын бүтцийг гараар баталгаажуулна.",
     };
   }
 
-  if (!file.type.startsWith("image/")) {
+  if (files.some((page) => !page.file.type.startsWith("image/"))) {
     return {
       ...manualFallback,
       notes: "Зөвхөн зургийн файлыг AI уншина. Асуултын бүтцийг гараар баталгаажуулна уу.",
     };
   }
 
-  const image = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const imagePart: Part = {
-    inlineData: {
-      data: image,
-      mimeType: file.type || "image/jpeg",
-    },
-  };
-  const makeParts = (prompt: string): Part[] => [{ text: prompt }, imagePart];
+  const imageParts = await Promise.all(
+    files.map(async (page) => [
+      { text: `Page ${page.pageNumber}` } satisfies Part,
+      {
+        inlineData: {
+          data: Buffer.from(await page.file.arrayBuffer()).toString("base64"),
+          mimeType: page.file.type || "image/jpeg",
+        },
+      } satisfies Part,
+    ])
+  );
+  const makeParts = (prompt: string): Part[] => [
+    { text: prompt },
+    ...imageParts.flat(),
+  ];
   const genAI = new GoogleGenerativeAI(apiKey);
 
   for (const modelName of getGeminiModels()) {
@@ -303,15 +325,28 @@ function parseQuestion(value: unknown, index: number): ExamMaterialQuestion {
   const correctLabel =
     typeof item.correctLabel === "string" && item.correctLabel.trim()
       ? item.correctLabel.trim()
+      : typeof item.correctAnswer === "string" && item.correctAnswer.trim()
+        ? item.correctAnswer.trim()
+      : null;
+  const sourcePageNumber =
+    typeof item.sourcePageNumber === "number" &&
+    Number.isInteger(item.sourcePageNumber) &&
+    item.sourcePageNumber > 0
+      ? item.sourcePageNumber
       : null;
   const options = Array.isArray(item.options)
     ? item.options.map((option, optionIndex) =>
         parseOption(option, optionIndex, correctLabel)
       ).filter(isOption)
+    : isRecord(item.options)
+      ? Object.entries(item.options).map(([label, text]) =>
+          parseOption({ label, text }, 0, correctLabel)
+        ).filter(isOption)
     : [];
 
   return {
     number,
+    sourcePageNumber,
     text: normalizeVisibleText(rawText.replace(/^\s*\d+[\).:-]?\s*/, "")),
     points,
     correctLabel,

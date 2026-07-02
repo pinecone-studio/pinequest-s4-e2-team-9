@@ -43,6 +43,7 @@ export async function GET(
           score: true,
           total: true,
           percentage: true,
+          pageCount: true,
           createdAt: true,
           updatedAt: true,
           student: { select: { name: true } },
@@ -88,6 +89,7 @@ export async function GET(
     "Оноо",
     "Нийт оноо",
     "Хувь",
+    "Хуудас",
     "Төлөв",
     "Огноо",
     ...exam.questions.map((question) => `Асуулт ${question.number}`),
@@ -100,6 +102,7 @@ export async function GET(
     formatNumber(safeNumber(submission.score)),
     formatNumber(getSubmissionTotal(submission, totalPoints)),
     `${Math.round(getSubmissionPercentage(submission, totalPoints))}%`,
+    formatPageCount(submission.pageCount),
     getSubmissionStatusText(submission.status),
     (submission.updatedAt || submission.createdAt).toLocaleDateString("mn-MN"),
     ...exam.questions.map((question) => {
@@ -170,4 +173,8 @@ function safeNumber(value: number | null | undefined) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1}`;
 }

@@ -1,6 +1,9 @@
 import { connection } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { summarizeSubmissions } from "@/lib/submission-state";
+import {
+  buildAnswerKeySignatureSeed,
+  summarizeSubmissions,
+} from "@/lib/submission-state";
 import { requireCurrentUser } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -23,8 +26,17 @@ export async function GET(
           score: true,
           total: true,
           percentage: true,
+          pageCount: true,
           updatedAt: true,
         },
+      },
+      questions: {
+        orderBy: { number: "asc" },
+        select: { number: true, points: true },
+      },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
       },
     },
   });
@@ -33,5 +45,15 @@ export async function GET(
     return Response.json({ error: "Шалгалт олдсонгүй." }, { status: 404 });
   }
 
-  return Response.json(summarizeSubmissions(exam.submissions));
+  const seed = buildAnswerKeySignatureSeed({
+    questions: exam.questions,
+    answerKeys: exam.answerKeys,
+  });
+  const summary = summarizeSubmissions(exam.submissions, seed);
+  const totalPossibleScore = exam.questions.reduce(
+    (sum, question) => sum + question.points,
+    0
+  );
+
+  return Response.json({ ...summary, totalPossibleScore });
 }

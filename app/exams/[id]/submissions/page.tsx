@@ -10,6 +10,7 @@ import { generateCaptureToken } from "@/lib/capture-token";
 import { msSince, perfLog, perfNow } from "@/lib/perf";
 import { prisma } from "@/lib/prisma";
 import {
+  buildAnswerKeySignatureSeed,
   getSubmissionStatusText,
   submissionStatuses,
   summarizeSubmissions,
@@ -46,6 +47,10 @@ export default async function SubmissionsPage({
       classroomId: true,
       captureToken: true,
       _count: { select: { answerKeys: true, questions: true } },
+      answerKeys: {
+        orderBy: { question: "asc" },
+        select: { question: true, answer: true },
+      },
       classroom: {
         select: {
           name: true,
@@ -64,6 +69,7 @@ export default async function SubmissionsPage({
           score: true,
           total: true,
           percentage: true,
+          pageCount: true,
           createdAt: true,
           updatedAt: true,
           student: { select: { id: true, name: true } },
@@ -94,7 +100,11 @@ export default async function SubmissionsPage({
   const totalPoints = exam.questions.reduce((sum, question) => sum + question.points, 0);
   const isAnswerKeyReady =
     exam._count.questions > 0 && exam._count.answerKeys >= exam._count.questions;
-  const submissionSummary = summarizeSubmissions(exam.submissions);
+  const signatureSeed = buildAnswerKeySignatureSeed({
+    questions: exam.questions,
+    answerKeys: exam.answerKeys,
+  });
+  const submissionSummary = summarizeSubmissions(exam.submissions, signatureSeed);
   const savedCount = submissionSummary.completed;
   const captureLink = getCaptureLink(exam.id, captureToken);
   perfLog("submissions-page", {
@@ -282,6 +292,7 @@ export default async function SubmissionsPage({
                     <tr>
                       <th className="px-4 py-3">Сурагч</th>
                       <th className="px-4 py-3">Оноо</th>
+                      <th className="px-4 py-3">Хуудас</th>
                       <th className="px-4 py-3">Хувь</th>
                       <th className="px-4 py-3">Төлөв</th>
                       <th className="px-4 py-3">Огноо</th>
@@ -297,6 +308,7 @@ export default async function SubmissionsPage({
                         <td className="px-4 py-3">
                           {formatNumber(submission.score)} / {formatNumber(submission.total)}
                         </td>
+                        <td className="px-4 py-3">{formatPageCount(submission.pageCount)}</td>
                         <td className="px-4 py-3">{Math.round(submission.percentage)}%</td>
                         <td className="px-4 py-3">
                           <span className={getStatusClass(submission.status)}>
@@ -383,4 +395,8 @@ function getStatusClass(status: string) {
 
 function formatNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatPageCount(value: number) {
+  return `${value || 1} хуудас`;
 }

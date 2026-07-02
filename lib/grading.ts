@@ -1,6 +1,7 @@
 export type GradeQuestion = {
   number: number;
   points?: number | null;
+  sourcePageNumber?: number | null;
   options?: Array<{ label: string; isCorrect?: boolean | null }>;
 };
 
@@ -17,15 +18,21 @@ export type GradeExtractedAnswer = {
   questionNumber?: number;
   selected?: string | null;
   selectedLabel?: string | null;
+  selectedAnswer?: string | null;
+  sourcePageNumber?: number | null;
 };
 
 export type GradeRow = {
   questionNumber: number;
   selectedLabel: string;
   correctLabel: string;
+  selectedAnswer: string;
+  correctAnswer: string;
   isCorrect: boolean;
   earnedPoints: number;
+  pointsAwarded: number;
   maxPoints: number;
+  sourcePageNumber: number | null;
 };
 
 export function gradeSubmission({
@@ -46,7 +53,10 @@ export function gradeSubmission({
   const selected = new Map(
     extractedAnswers.map((item) => [
       item.questionNumber ?? item.question ?? 0,
-      item.selectedLabel ?? item.selected ?? "",
+      {
+        selectedLabel: item.selectedLabel ?? item.selected ?? item.selectedAnswer ?? "",
+        sourcePageNumber: item.sourcePageNumber ?? null,
+      },
     ])
   );
 
@@ -59,7 +69,7 @@ export function gradeSubmission({
       optionLabels
     );
     const selectedLabel = findOptionLabel(
-      selected.get(question.number) ?? "",
+      selected.get(question.number)?.selectedLabel ?? "",
       optionLabels
     );
     const maxPoints =
@@ -72,9 +82,14 @@ export function gradeSubmission({
       questionNumber: question.number,
       selectedLabel,
       correctLabel,
+      selectedAnswer: selectedLabel,
+      correctAnswer: correctLabel,
       isCorrect,
       earnedPoints: isCorrect ? maxPoints : 0,
+      pointsAwarded: isCorrect ? maxPoints : 0,
       maxPoints,
+      sourcePageNumber:
+        question.sourcePageNumber ?? selected.get(question.number)?.sourcePageNumber ?? null,
     };
   });
   const totalScore = rows.reduce((sum, row) => sum + row.earnedPoints, 0);

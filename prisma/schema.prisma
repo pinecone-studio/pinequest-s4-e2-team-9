@@ -43,6 +43,7 @@ model Exam {
   ownerUserId   String?
   captureToken  String?      @unique
   answerKeys    AnswerKey[]
+  materialPages ExamMaterialPage[]
   questions     ExamQuestion[]
   submissions   Submission[]
   createdAt     DateTime     @default(now())
@@ -52,6 +53,25 @@ model Exam {
   @@index([classroomId])
 }
 
+model ExamMaterialPage {
+  id             String   @id @default(cuid())
+  examId         String
+  exam           Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  pageNumber     Int
+  fileName       String?
+  mimeType       String?
+  storagePath    String
+  publicUrl      String?
+  status         String   @default("UPLOADED")
+  extractionJson Json?
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([examId, pageNumber])
+  @@index([examId])
+}
+
 model ExamQuestion {
   id        String       @id @default(cuid())
   examId    String
@@ -59,6 +79,7 @@ model ExamQuestion {
   number    Int
   text      String
   points    Float        @default(1)
+  sourcePageNumber Int?
   options   ExamOption[]
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
@@ -100,6 +121,9 @@ model Submission {
   score       Float              @default(0)
   total       Float              @default(0)
   percentage  Float              @default(0)
+  pageCount   Int                @default(1)
+  gradingDetails Json?
+  pages       SubmissionPage[]
   answers     SubmissionAnswer[]
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
@@ -108,6 +132,25 @@ model Submission {
   @@index([studentId])
   @@index([examId, studentId])
   @@index([examId, status])
+}
+
+model SubmissionPage {
+  id             String     @id @default(cuid())
+  submissionId   String
+  submission     Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  pageNumber     Int
+  fileName       String?
+  mimeType       String?
+  storagePath    String
+  publicUrl      String?
+  status         String     @default("UPLOADED")
+  extractionJson Json?
+  errorMessage   String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([submissionId, pageNumber])
+  @@index([submissionId])
 }
 
 model SubmissionAnswer {

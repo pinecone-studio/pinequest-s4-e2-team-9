@@ -9,6 +9,7 @@ type SubmissionStateRow = {
   score?: number | null;
   total?: number | null;
   percentage?: number | null;
+  pageCount?: number | null;
   createdAt?: Date | string | null;
   updatedAt?: Date | string | null;
 };
@@ -18,7 +19,8 @@ type SubmissionAnalysis = {
   answers: Array<{
     questionNumber: number;
     selectedLabel: string | null;
-    confidence?: Confidence;
+    confidence?: Confidence | number;
+    needsReview?: boolean;
   }>;
 };
 
@@ -56,7 +58,7 @@ export function isActiveSubmissionStatus(status: string | null | undefined) {
   return activeStatuses.has(status ?? "");
 }
 
-export function buildSubmissionsSignature(submissions: SubmissionStateRow[]) {
+export function buildSubmissionsSignature(submissions: SubmissionStateRow[], seed = "") {
   const value = [...submissions]
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((submission) =>
@@ -67,14 +69,15 @@ export function buildSubmissionsSignature(submissions: SubmissionStateRow[]) {
         numberToken(submission.score),
         numberToken(submission.total),
         numberToken(submission.percentage),
+        numberToken(submission.pageCount),
       ].join(":")
     )
     .join("|");
 
-  return createHash("sha1").update(value).digest("hex");
+  return createHash("sha1").update(`${seed}|${value}`).digest("hex");
 }
 
-export function summarizeSubmissions(submissions: SubmissionStateRow[]) {
+export function summarizeSubmissions(submissions: SubmissionStateRow[], seed = "") {
   let active = 0;
   let completed = 0;
   let needsReview = 0;
@@ -100,7 +103,7 @@ export function summarizeSubmissions(submissions: SubmissionStateRow[]) {
   }
 
   return {
-    signature: buildSubmissionsSignature(submissions),
+    signature: buildSubmissionsSignature(submissions, seed),
     total: submissions.length,
     active,
     completed,
@@ -108,6 +111,29 @@ export function summarizeSubmissions(submissions: SubmissionStateRow[]) {
     failed,
     latestUpdatedAt,
   };
+}
+
+export function buildAnswerKeySignatureSeed({
+  questions,
+  answerKeys,
+}: {
+  questions: Array<{ number: number; points?: number | null }>;
+  answerKeys: Array<{ question: number; answer?: string | null }>;
+}) {
+  const totalPossibleScore = questions.reduce(
+    (sum, question) =>
+      sum +
+      (typeof question.points === "number" && Number.isFinite(question.points)
+        ? question.points
+        : 0),
+    0
+  );
+
+  return [
+    numberToken(totalPossibleScore),
+    questions.map((question) => `${question.number}:${numberToken(question.points)}`).join(","),
+    answerKeys.map((answer) => `${answer.question}:${answer.answer ?? ""}`).join(","),
+  ].join("|");
 }
 
 export function decideProcessedSubmissionStatus({
@@ -164,6 +190,10 @@ function getReviewReason({
 
     seenQuestions.add(answer.questionNumber);
 
+    if (answer.needsReview) {
+      return "needs_review";
+    }
+
     if (
       answer.selectedLabel &&
       !isValidOptionLabel(answer.selectedLabel, optionLabelsByQuestion[answer.questionNumber] ?? [])
@@ -197,7 +227,11 @@ function isValidOptionLabel(selectedLabel: string, optionLabels: string[]) {
   return optionLabels.some((optionLabel) => labelsMatch(optionLabel, selectedLabel));
 }
 
-function toConfidenceScore(confidence: Confidence | undefined): number | null {
+function toConfidenceScore(confidence: Confidence | number | undefined): number | null {
+  if (typeof confidence === "number" && Number.isFinite(confidence)) {
+    return confidence > 1 ? confidence / 100 : confidence;
+  }
+
   if (confidence === "high") {
     return 1;
   }

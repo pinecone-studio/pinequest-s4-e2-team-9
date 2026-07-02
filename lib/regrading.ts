@@ -17,6 +17,7 @@ export async function regradeExamSubmissions(examId: string) {
         select: {
           number: true,
           points: true,
+          sourcePageNumber: true,
           options: {
             orderBy: { createdAt: "asc" },
             select: { label: true, isCorrect: true },
@@ -81,6 +82,7 @@ export async function regradeExamSubmissions(examId: string) {
             score: update.grading.totalScore,
             total: update.grading.maxScore,
             percentage: update.grading.percentage,
+            gradingDetails: update.grading.rows,
           },
         });
       }
